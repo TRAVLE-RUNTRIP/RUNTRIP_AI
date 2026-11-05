@@ -24,10 +24,10 @@ class SafetyIndex:
     def __init__(self, edges, lamps):
         """edges: EPSG:4326 GeoDataFrame(highway 열), lamps: 위도·경도(·관리기관명) 열이 있는 DataFrame"""
         e = edges.to_crs(5179).reset_index(drop=True)
-        e["hw"] = e["highway"].apply(lambda v: v[0] if isinstance(v, list) else v)
         # OSMnx는 합쳐진 구간의 서로 다른 태그를 리스트로 줌 → "no"가 하나라도 있으면 추정하지 않음
         lit = e["lit"].apply(lambda v: "no" if isinstance(v, list) and "no" in v else str(v)) if "lit" in e else ""
-        self.big = e.loc[e["hw"].isin(BIG) & (lit != "no"), ["geometry"]]
+        is_big = e["highway"].apply(lambda v: any(h in BIG for h in v) if isinstance(v, list) else v in BIG)   # 합쳐진 구간은 highway도 리스트
+        self.big = e.loc[is_big & (lit != "no"), ["geometry"]]
         self.lamps = lamp_points(lamps)
         self.hull = data_area(self.lamps)             # 밖은 '자료없음': 어두움으로 보지 않고 점수에서도 뺌
 
@@ -107,4 +107,6 @@ if __name__ == "__main__":
     assert "큰길(조명 추정)" not in [s["grade"] for s in r5["segments"]] and r5["segments"][-1]["grade"] == "적음", r5
     r5b = SafetyIndex(edges.assign(lit=["yes", ["yes", "no"]]), lamps).grade_course([(dx(400), lat0), (dx(600), lat0)])   # 합쳐진 구간의 lit 리스트
     assert "큰길(조명 추정)" not in [s["grade"] for s in r5b["segments"]], r5b
+    r5c = SafetyIndex(edges.assign(highway=["residential", ["residential", "primary"]]), lamps).grade_course([(dx(400), lat0), (dx(600), lat0)])
+    assert r5c["segments"][-1]["grade"] == "큰길(조명 추정)", r5c                     # 리스트 중 하나라도 큰길이면 큰길
     print("자가 점검 통과")
