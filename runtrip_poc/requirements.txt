@@ -1,0 +1,5 @@
+torch
+numpy
+sentence-transformers   # KURE-v1 임베딩
+google-genai            # Gemini 합성 데이터 생성
+requests                # TourAPI 호출
