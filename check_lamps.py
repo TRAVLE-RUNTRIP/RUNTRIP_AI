@@ -17,7 +17,10 @@ if lack:
     print("없는 열:", lack, "← 위 '열 이름' 줄을 그대로 알려 주세요")
     sys.exit(1)
 
+df[["위도", "경도"]] = df[["위도", "경도"]].apply(pd.to_numeric, errors="coerce")   # "-" 같은 값은 빈 좌표로
+n0 = len(df)
 df = df.dropna(subset=["위도", "경도"])
+print(f"좌표 없음·잘못된 좌표로 제외: {n0 - len(df)}행")
 addr = df["소재지지번주소"].fillna("").astype(str) + " " + df["소재지도로명주소"].fillna("").astype(str)
 org = df["관리기관명"].fillna("").astype(str) if "관리기관명" in df.columns else pd.Series("", index=df.index)
 text_all = addr + " " + org                      # 주소와 관리기관명을 합쳐서 '서울'을 찾음

@@ -9,5 +9,6 @@ for name, pt in {"시청(중구)": (37.5663, 126.9779), "홍대입구(마포)": 
     print(f"\n[{name}] 전체 구간 {len(e)}개")
     print(hw.value_counts().head(8))
     road = e[hw.isin(["primary", "secondary", "tertiary", "residential", "unclassified", "living_street"])]
-    share = road["sidewalk"].notna().mean() if "sidewalk" in road.columns else 0
+    cols = [c for c in ("sidewalk", "sidewalk:left", "sidewalk:right", "sidewalk:both") if c in road.columns]
+    share = road[cols].notna().any(axis=1).mean() if cols else 0
     print(f"차도 구간 {len(road)}개 중 sidewalk 태그 있는 비율: {share:.0%}")

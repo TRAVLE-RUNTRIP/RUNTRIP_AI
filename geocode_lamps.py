@@ -42,7 +42,7 @@ if __name__ == "__main__":
     if not KEY:
         raise SystemExit("KAKAO_REST_KEY 환경 변수가 없습니다")
     os.makedirs(DST, exist_ok=True)
-    cache = dict(zip(*[pd.read_csv(CACHE)[c] for c in ("주소", "좌표")])) if os.path.exists(CACHE) else {}
+    cache = dict(zip(*[pd.read_csv(CACHE, keep_default_na=False)[c] for c in ("주소", "좌표")])) if os.path.exists(CACHE) else {}
     files = {f: read_csv(f) for f in sorted(glob.glob(os.path.join(SRC, "*.csv"))) if not any(g in f for g in SKIP)}
 
     def addr_of(df):   # 지번 주소 우선, 없으면 도로명
