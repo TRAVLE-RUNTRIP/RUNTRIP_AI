@@ -18,6 +18,9 @@ DARK_RUN_M = 100                                      # 보안등 0개가 100m �
 # ponytail: 판단 기준값, 추천·완주 로그가 쌓이면 조정
 WEIGHT = {"큰길(조명 추정)": 1.0, "많음": 1.0, "보통": 0.8, "적음": 0.0}
 LEVELS = [(80, "좋음"), (60, "보통"), (0, "주의")]    # 앱 표시용 점수 등급
+# 경로 중 보안등 자료 범위 안 길이가 이 비율보다 적으면 level = "자료부족" (자료 밖 큰길 추정만으로 100점이 나오는 것 방지, 예: 강남)
+# ponytail: 0.5는 임시값, FE와 표시 방식 확정 시 조정
+MIN_DATA_RATIO = 0.5
 
 
 class SafetyIndex:
@@ -41,8 +44,10 @@ class SafetyIndex:
         cnt = gpd.sjoin(self.lamps, gpd.GeoDataFrame(geometry=p.buffer(BUF_M), crs=5179), predicate="within").groupby("index_right").size()
         p["lamps"] = p.index.map(cnt).fillna(0)
         dens = per100(p["lamps"], p["len_m"])
-        grade = ["큰길(조명 추정)" if i in big.index else "자료없음" if not self.hull.contains(m) else "적음" if dens[i] == 0
-                 else "많음" if dens[i] >= MANY else "보통" for i, m in enumerate(mid.geometry)]
+        inside = [self.hull.contains(m) for m in mid.geometry]
+        grade = ["큰길(조명 추정)" if i in big.index else "자료없음" if not ok else "적음" if dens[i] == 0
+                 else "많음" if dens[i] >= MANY else "보통" for i, ok in enumerate(inside)]
+        data_ratio = sum(L for L, ok in zip(p["len_m"], inside) if ok) / p["len_m"].sum()
 
         segs = []                                     # 같은 등급 조각을 이어 붙임: [시작m, 끝m, 등급]
         pos = 0.0
@@ -71,6 +76,9 @@ class SafetyIndex:
         total = sum(L for _, L in rated)
         score = round(100 * sum(w * L for w, L in rated) / total) if total else None
         level = None if score is None else next(name for cut, name in LEVELS if score >= cut)
+        if score is not None and data_ratio < MIN_DATA_RATIO:
+            level = "자료부족"
+            warnings.append("이 경로는 가로등 자료가 있는 지역 밖이 많아 점수는 참고용이에요")
         # coverage: 보안등으로 판정한(관측) 길이 비율. 행정구역 기준 자료 확보율이지 그 구의 자료가 빠짐없다는 뜻은 아님
         # estimated: 큰길(조명 추정) 길이 비율. 점수엔 PPT 설계(도로 유형 기반)대로 들어가므로 둘을 같이 보여 줘야 함
         ratio = lambda gs: round(sum(b - a for a, b, g in merged if g in gs) / line.length, 2) if line.length else 0
@@ -109,4 +117,10 @@ if __name__ == "__main__":
     assert "큰길(조명 추정)" not in [s["grade"] for s in r5b["segments"]], r5b
     r5c = SafetyIndex(edges.assign(highway=["residential", ["residential", "primary"]]), lamps).grade_course([(dx(400), lat0), (dx(600), lat0)])
     assert r5c["segments"][-1]["grade"] == "큰길(조명 추정)", r5c                     # 리스트 중 하나라도 큰길이면 큰길
+    # 자료 범위 밖 큰길만 지나는 경로: 추정만으로 100점이지만 level은 '자료부족'. 자료 범위 안 큰길(0~600m 구간의 400~600m)은 그대로
+    far = gpd.GeoDataFrame({"highway": ["primary"]}, geometry=[LineString([(dx(3000), lat0), (dx(3600), lat0)])], crs=4326)
+    r6 = SafetyIndex(pd.concat([edges, far]), lamps).grade_course([(dx(3000), lat0), (dx(3600), lat0)])
+    assert r6["level"] == "자료부족" and r6["score"] == 100 and r6["warnings"][-1].endswith("참고용이에요"), r6
+    r7 = SafetyIndex(edges, lamps).grade_course([(dx(400), lat0), (dx(600), lat0)])
+    assert r7["level"] == "좋음" and r7["score"] == 100, r7
     print("자가 점검 통과")
