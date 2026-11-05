@@ -40,6 +40,7 @@ python safety.py          # 자가 점검
 ```python
 import osmnx as ox, pandas as pd
 from safety import SafetyIndex
+ox.settings.useful_tags_way = list(set(ox.settings.useful_tags_way + ["lit"]))   # 필수: 기본값엔 lit이 없어 lit=no 큰길도 '조명 추정'이 됨
 edges = ox.graph_to_gdfs(ox.graph_from_point((37.5685, 126.9850), dist=2500, network_type="all"), nodes=False)
 idx = SafetyIndex(edges, pd.read_csv("서울_보안등.csv"))
 idx.grade_course([(126.9918, 37.5704), (126.9850, 37.5820)], night=True)   # OSRM 경로 좌표를 그대로 넣으면 됨

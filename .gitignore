@@ -3,7 +3,6 @@ __pycache__/
 .env
 # 다시 생성하는 임베딩·피처·학습 결과
 data/kure/
-data/kure_dummy/
 data/features.npz
 poc/runs/
 # 팀원 평가 결과 (공개하지 않음)

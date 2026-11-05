@@ -85,10 +85,10 @@ for f in files:
 print("[파일별 결과]")
 for name, gu, n, msg in summary:
     print(f"  {name} → {gu or '?'} : {msg}")
-if parts:
-    out = pd.concat(parts, ignore_index=True)
-    out.to_csv("서울_보안등.csv", index=False, encoding="utf-8-sig")
-    print(f"\n합계 {len(out)}행 → 서울_보안등.csv 저장")
-    print(out["관리기관명"].value_counts().to_string())
-else:
-    print("\n합칠 데이터가 없습니다.")
+bad = [name for name, gu, n, msg in summary if n == 0]
+if bad or not parts:   # 일부만 합친 파일로 기존 서울_보안등.csv를 덮지 않음
+    sys.exit(f"\n저장하지 않았습니다. 좌표를 못 읽은 파일: {bad or '없음(합칠 데이터 없음)'}")
+out = pd.concat(parts, ignore_index=True)
+out.to_csv("서울_보안등.csv", index=False, encoding="utf-8-sig")
+print(f"\n합계 {len(out)}행 → 서울_보안등.csv 저장")
+print(out["관리기관명"].value_counts().to_string())

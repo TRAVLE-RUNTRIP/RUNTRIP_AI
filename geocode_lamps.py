@@ -27,7 +27,7 @@ def geocode(addr):
                 raise SystemExit(f"카카오 인증 실패({e.code}): REST API 키와 '카카오맵 사용 설정 ON'을 확인하세요")
         except (urllib.error.URLError, TimeoutError):
             pass
-    return (None, None)
+    return None   # 요청 실패: '주소 없음'((None, None))과 구분해 캐시에 남기지 않고 다음 실행 때 다시 시도
 
 
 def read_csv(path):
@@ -56,8 +56,14 @@ if __name__ == "__main__":
         todo |= set(addr_of(df[miss])) - set(cache) - {""}
     print(f"새로 찾을 주소 {len(todo)}개 (캐시 {len(cache)}개)")
     with ThreadPoolExecutor(8) as ex:
-        for a, (la, lo) in zip(todo, ex.map(geocode, todo)):
-            cache[a] = f"{la},{lo}" if la else ""
+        failed = 0
+        for a, r in zip(todo, ex.map(geocode, todo)):
+            if r is None:
+                failed += 1
+                continue
+            cache[a] = f"{r[0]},{r[1]}" if r[0] else ""
+    if failed:
+        print(f"요청 실패 {failed}개는 캐시에 넣지 않음 → 다시 실행하면 재시도")
     pd.DataFrame({"주소": list(cache), "좌표": list(cache.values())}).to_csv(CACHE, index=False, encoding="utf-8-sig")
 
     for f, df in files.items():

@@ -1,4 +1,4 @@
-# OSRM 도보 경로 서버를 Docker로 띄웁니다. 처음 한 번은 지도 전처리(약 10~30분), 다음부턴 바로 실행.
+﻿# OSRM 도보 경로 서버를 Docker로 띄웁니다. 처음 한 번은 지도 전처리(약 10~30분), 다음부턴 바로 실행.
 # 사용: 런트립 폴더에서  powershell -ExecutionPolicy Bypass -File osrm\run_osrm.ps1
 # 확인: http://localhost:5000/route/v1/foot/126.9918,37.5704;126.9850,37.5820
 # EC2에도 같은 이미지·같은 명령으로 그대로 옮길 수 있습니다.

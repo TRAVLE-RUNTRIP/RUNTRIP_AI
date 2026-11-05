@@ -25,15 +25,6 @@ python poc/train.py --loss A --lr 1e-3 --dropout 0.1 --seed 0
 
 결과는 `poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}.json`과 같은 이름의 `.pt`(최적 epoch 가중치, `/recommend` 서빙용)로 저장돼요.
 
-KURE 없이 흐름만 점검할 때 (무작위 벡터라 성능 수치는 의미 없음):
-
-```bash
-python poc/embed_kure.py --dummy               # data/kure_dummy/ (data/kure/는 건드리지 않음)
-python poc/features.py --kure-dir data/kure_dummy
-python poc/evaluate.py
-python poc/train.py --loss A --test
-```
-
 ## 파일
 
 | 파일 | 내용 | 수정 |
