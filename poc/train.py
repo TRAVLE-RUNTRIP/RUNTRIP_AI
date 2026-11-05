@@ -2,7 +2,7 @@
 
 실행 예: python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0
          (튜닝이 끝난 설정으로만) python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0 --test
-결과: poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}.json
+결과: poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}.json, 같은 이름 .pt (최적 epoch 가중치, /recommend 서빙용)
 """
 import argparse, json, random, time
 from pathlib import Path
@@ -79,6 +79,7 @@ def main(args):
     RUNS.mkdir(exist_ok=True)
     out = RUNS / f"{args.loss}_lr{args.lr}_do{args.dropout}_s{args.seed}.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    torch.save({"state_dict": best_state, "d": Xtr.shape[-1], "dropout": args.dropout}, out.with_suffix(".pt"))
     print(json.dumps({k: v for k, v in result.items() if k != "args"}, ensure_ascii=False))
 
 

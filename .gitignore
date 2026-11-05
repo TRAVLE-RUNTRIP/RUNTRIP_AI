@@ -3,8 +3,29 @@ __pycache__/
 .env
 # 다시 생성하는 임베딩·피처·학습 결과
 data/kure/
+data/kure_dummy/
 data/features.npz
 poc/runs/
 # 팀원 평가 결과 (공개하지 않음)
 data/review/scored/
 data/review/fix_list.md
+.venv/
+cache/
+*.graphml
+# OSRM 지도·전처리 파일(약 3GB)은 README대로 받아서 만듦
+osrm/*
+!osrm/foot.lua
+!osrm/run_osrm.ps1
+# 기획 문서·발표 자료
+*.pptx
+*.docx
+*.pdf
+# 구별 원본·지오코딩 중간 결과 (서울_보안등.csv로 합쳐 둠)
+lamps/
+lamps_geo/
+보안등_좌표캐시.csv
+# 개인 진행 보고
+한 일 정리.txt
+# 팀원 배포용 묶음 (루트 파일과 중복)
+runtrip_safety_osrm/
+runtrip_safety_osrm.zip
