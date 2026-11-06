@@ -19,10 +19,11 @@ WBS 2.5 안전도 스코어링 설계 · 3.11 AI 데이터 수집 · OSRM 운영
 
 ```bash
 cd osrm
-curl -LO https://download.geofabrik.de/asia/south-korea-latest.osm.pbf
+curl -LO https://download.geofabrik.de/asia/south-korea-latest.osm.pbf     # Windows PowerShell 5.1은 curl.exe -LO ...
 docker compose up -d          # 끄기: docker compose down
 ```
 
+- 예전 `run_osrm.ps1`로 띄운 적이 있으면 그 컨테이너가 5000번 포트를 쓰고 있으니 먼저 지우기: `docker rm -f osrm-foot`
 - 처음 한 번은 `prepare`가 전처리(extract → contract) 후 끝나고 `osrm`이 뜸. 다음부턴 전처리를 건너뛰고 바로 실행.
   진행 확인: `docker compose logs -f prepare`
 - 필요 사양 (2026-11-06, 8코어 PC 측정)
@@ -45,7 +46,7 @@ docker compose up -d          # 끄기: docker compose down
 
   경로 1개는 약 15ms. 전처리 방식은 **CH**: MLD는 같은 거리 행렬이 430~490ms라 7배 느려 바꿈 (거리 차이 최대 2.8m)
 - `foot.lua` = 기본 도보 설정에서 **페리만 뺀 것**. 기본 설정은 한강버스를 경로에 넣어 시청→잠실이 25.1km로 나옴 (수정 후 13.8km).
-  설정을 바꾸면 `osrm/*.osrm*` 파일을 지우고 `docker compose up -d`로 다시 전처리.
+  설정을 바꾸면 `osrm/` 폴더에서 `docker compose down` → `*.osrm*` 파일 삭제 → `docker compose up -d` (다시 전처리 후 실행).
 - EC2에도 같은 이미지(ghcr.io/project-osrm/osrm-backend:v5.27.1)·같은 명령으로 옮길 수 있음.
 
 ## 2. 조명 환경 점수 (safety/safety.py)
