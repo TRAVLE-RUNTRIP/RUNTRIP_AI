@@ -3,12 +3,14 @@
 사용: python segment_stats.py [서울_보안등.csv] [반경(m)]
 주의: 기준값은 종로구·중구 구간만으로 집계합니다 (마포·용산은 주소로 찾은 좌표라 기준 산정에서 뺌). 자료 없는 곳의 0개를 '어두움'으로 보지 않기 위해서예요."""
 import sys
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.ops import unary_union
 
 BUF_M = 30                                   # 도로에서 30m 안의 보안등만 그 구간 것으로 셈
+BOUNDS = Path(__file__).with_name("서울_구경계.geojson")
 CENTER, DIST = (37.5685, 126.9850), 2500     # 시청~종로 사이 중심, 반경 2.5km (더 크게: 2번째 인자로 미터 단위 지정)
 ROAD = ["primary", "secondary", "tertiary", "residential", "living_street", "unclassified"]
 FOOT = ["pedestrian", "footway", "path", "steps"]
@@ -22,8 +24,13 @@ def lamp_points(lamps):
 
 
 def data_area(g):
-    """보안등 자료가 있는 지역. 구마다 따로 감쌈: 한꺼번에 감싸면 사이에 낀 자료 없는 구까지 '적음'이 됨"""
-    return unary_union(list(g.dissolve("gu").convex_hull.buffer(100)))
+    """보안등 자료가 있는 지역 = 자료 있는 구의 실제 경계(서울_구경계.geojson, OSM 행정경계).
+    볼록 껍질로 감싸면 오목한 구가 이웃 구를 덮음 (마포 → 신촌·연희, 노원 → 창동이 자료 없이 '적음'). 경계 파일에 없는 구는 볼록 껍질"""
+    area = g.dissolve("gu").convex_hull.buffer(100)
+    if BOUNDS.exists():
+        b = gpd.read_file(BOUNDS).to_crs(5179).set_index("gu").geometry
+        area = [b[k].buffer(BUF_M) if k in b.index else h for k, h in area.items()]   # 경계 너머 30m 보안등도 그 길을 비춤
+    return unary_union(list(area))
 
 
 def per100(n, len_m, buf=BUF_M):
