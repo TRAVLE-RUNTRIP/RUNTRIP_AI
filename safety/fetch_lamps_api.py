@@ -56,10 +56,12 @@ def fetch(key, gu):
         rows += page(key, inst, no)[1]
     assert len(rows) == total, f"{gu}: {len(rows)}건 받음, 총 {total}건"
     os.makedirs("lamps", exist_ok=True)
-    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+    tmp = out + ".tmp"                           # 다 쓴 뒤에 이름을 바꿈: 중간에 멈춘 반쪽 파일이 '이미 있음'으로 건너뛰어지지 않게
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(COLS)
         w.writerows([r.get(k, "") for k in COLS.values()] for r in rows)
+    os.replace(tmp, out)
     print(f"{gu}: {total}건, 좌표 있음 {sum(1 for r in rows if r.get('latitude'))}건 → {out}")
 
 
