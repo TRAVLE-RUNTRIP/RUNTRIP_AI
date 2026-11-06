@@ -75,7 +75,9 @@ idx.grade_course([(126.9918, 37.5704), (126.9850, 37.5820)], night=True)   # OSR
   밀도 낮은 구는 '적음'이 실제보다 많이 나올 수 있음 → #10(3.8) 때 구별 재확인.
   강남·송파·마포·용산은 주소로 좌표를 찾아 한 점에 몰림 (강남은 18,767개 → 지점 7,830곳). 송파는 기준일 2022-12, 주소 12% 못 찾음
 - 다시 만들 때만 필요 (`.env`의 키를 환경 변수로):
-  `python fetch_lamps_api.py` (DATA_GO_KR_KEY, 전국보안등정보표준데이터 API → `lamps/`, 종로·중구·마포·용산은 기존 파일)
+  먼저 종로·중구·마포·용산은 API 대신 공공데이터포털 '보안등정보' 파일을 받아 `lamps/서울특별시_OO구_보안등정보.csv`로 넣기
+  (`lamps/`는 git에 없음. 안 넣으면 `서울_보안등.csv`가 그 4개 구가 빠진 채로 덮어써짐)
+  → `python fetch_lamps_api.py` (DATA_GO_KR_KEY, 전국보안등정보표준데이터 API → `lamps/`, 종로·중구·마포·용산은 기존 파일)
   → `python geocode_lamps.py` (KAKAO_REST_KEY, 빈 좌표를 주소로 채움 → `lamps_geo/`) → `python merge_lamps.py lamps_geo`
 - `segment_stats.py`: 기준값(8개/100m)을 정한 통계 스크립트 + 집계 공통 함수(safety.py가 같은 방식으로 셈). 기준값은 종로·중구로 정했고 나머지 구는 3.8 때 재확인 예정.
 - `check_osm.py`, `check_lamps.py`: 데이터 점검용.
