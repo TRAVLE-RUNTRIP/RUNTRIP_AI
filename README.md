@@ -11,7 +11,7 @@
 
 # AI 서버 (server/)
 
-API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1)만 있고, 점수는 PoC 규칙 기준선이에요 (#7에서 MLP로 교체).
+API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, PoC 규칙 기준선, #7에서 MLP로 교체)와 `POST /optimize`(B2)가 있어요.
 
 ```bash
 docker compose up -d --build        # 레포 루트: AI 서버(127.0.0.1:8000) + OSRM(5000). OSRM 전처리는 아래 1장
@@ -43,11 +43,33 @@ uvicorn server.app:app --port 8000
   | UNKNOWN_PLACE | 422 | 서빙 파일에 없는 `placeId` (BE와 `places.csv` 버전이 다름) |
   | RESOURCE_NOT_FOUND / METHOD_NOT_ALLOWED | 404 / 405 | 없는 주소·메서드 |
   | SERVER_ERROR | 500 | 그 밖의 오류 |
+- `POST /optimize`: 목표 거리 ±10% 안에서 점수 합이 최대인 장소 조합·순서 ('코스 생성 로직 개선안 (확정)')
+
+  ```json
+  // 요청: 거리표 첫 줄 = 출발지, 마지막 줄 = 도착지(순환이면 출발지와 같은 좌표), 가운데 = placeIds 순서 (정수 m)
+  {"targetKm": 5, "maxPlaces": 3, "timeLimitMs": 500, "placeIds": ["T1116925", "T128961"], "scores": [0.92, 0.88],
+   "distanceMatrixM": [[0, 320, 410, 0], [320, 0, 150, 320], [410, 150, 0, 410], [0, 320, 410, 0]], "excludedCombos": []}
+  // 응답. 못 찾으면 {"found": false, "orderedPlaceIds": [], "totalKm": null} → BE가 NO_PLACES / NO_MORE_COURSES
+  {"found": true, "orderedPlaceIds": ["T128961", "T1116925"], "totalKm": 5.1}
+  ```
+
+  - 장소마다 빼면 점수 × 1000만큼 손해(`AddDisjunction`), 거리 상한 목표 × 1.1, 하한 × 0.9, 장소 수 ≤ `maxPlaces`. 점수가 음수인 장소는 넣지 않음
+  - `excludedCombos`: 이미 보여준 조합의 장소가 모두 다시 들어가지 않게 함 (개선안 10장 "활성 변수 합 ≤ 장소 수 − 1")
+  - 솔버: 제한 시간의 30%는 OR-Tools Routing으로 첫 해, 나머지는 그 해를 힌트로 CP-SAT이 개선 → 점수 합이 큰 쪽.
+    Routing만 쓰면 3·5km 32건 중 28건만 최적이고 1건은 해를 놓쳐서 바꿈 (2026-11-06)
+  - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복, 음수 거리, 범위 밖 값
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
-- 점검 `pip install -r server/requirements-dev.txt` → `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
-- 측정 (2026-11-06, Docker 컨테이너에 HTTP로 20회 중앙값): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms. 이미지 307MB, 실행 메모리 약 43MB
+- 점검 (`pip install -r server/requirements-dev.txt`)
+  - `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
+  - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
+  - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
+- 측정 (2026-11-06)
+  - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
+  - `/optimize` (`bench_optimize`, 후보 상위 40곳, 제한 500ms): 48건 중 47건 해를 찾음 (못 찾은 1건은 완전 탐색으로도 답이 없음),
+    찾은 코스 모두 목표 ±10%·OSRM 실제 경로 거리와 같음, 3·5km 32건 전부 최적, 다시 만들기 128/141, 응답 중앙값 421ms · 최대 603ms
+  - 이미지 539MB (OR-Tools 포함), 실행 메모리 약 82MB
 
 ---
 
