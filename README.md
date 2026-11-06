@@ -5,6 +5,49 @@
 | [poc/](poc/README.md), [data/](data/) | 장소 추천 모델 PoC (피처·규칙 기준선·MLP 학습/평가)와 데이터 | [poc/README.md](poc/README.md) |
 | `osrm/` | OSRM 도보 경로 서버 | 아래 1장 |
 | `safety/` | 조명 환경 점수 (`safety.py`, `서울_보안등.csv`, 수집·점검 스크립트) | 아래 2·3장 |
+| `server/`, `compose.yaml` | AI 서버 (FastAPI, API 명세 B파트) | 아래 AI 서버 |
+
+---
+
+# AI 서버 (server/)
+
+API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1)만 있고, 점수는 PoC 규칙 기준선이에요 (#7에서 MLP로 교체).
+
+```bash
+docker compose up -d --build        # 레포 루트: AI 서버(127.0.0.1:8000) + OSRM(5000). OSRM 전처리는 아래 1장
+# 또는 Docker 없이 (레포 루트에서)
+pip install -r server/requirements.txt
+uvicorn server.app:app --port 8000
+```
+
+- BE 호출 주소: 같은 Compose 네트워크면 `http://ai-server:8000`, 로컬 개발은 `http://127.0.0.1:8000`. 포트는 127.0.0.1에만 열어 외부에 공개하지 않아요
+  - `localhost`는 쓰지 말 것: Windows에서 IPv6(`::1`)를 먼저 시도하다 실패해 요청마다 약 2초 늦어져요 (500ms 제한 초과, 2026-11-06 측정)
+- `osrm/`에서 OSRM을 따로 띄워 둔 상태면 5000번 포트가 겹치니 `osrm/`에서 `docker compose down` 후 실행
+- `GET /health` → `{"status": "ok"}`
+- `POST /recommend`
+
+  ```json
+  // 요청
+  {"preferences": ["NIGHT_VIEW", "NATURE"], "isNight": true,
+   "candidates": [{"placeId": "T1116925", "detourRatio": 0.42}]}
+  // 응답 (후보 순서 그대로, 높을수록 추천)
+  {"scores": [{"placeId": "T1116925", "score": 0.92}]}
+  ```
+
+  점수 = 고른 취향 중 KURE 유사도 최댓값 + 0.3 × 취향 일치 − 0.3 × `detourRatio` (`poc/evaluate.py` `rule_baseline`, 가중치 고정)
+- 오류: `{ "code", "message" }`
+
+  | code | HTTP | 상황 |
+  |---|---|---|
+  | VALIDATION_ERROR | 400 | 취향이 없거나 중복·잘못된 값, `detourRatio`가 음수 |
+  | UNKNOWN_PLACE | 422 | 서빙 파일에 없는 `placeId` (BE와 `places.csv` 버전이 다름) |
+  | RESOURCE_NOT_FOUND / METHOD_NOT_ALLOWED | 404 / 405 | 없는 주소·메서드 |
+  | SERVER_ERROR | 500 | 그 밖의 오류 |
+- 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
+  `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
+  `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
+- 점검 `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
+- 측정 (2026-11-06, Docker 컨테이너에 HTTP로 20회 중앙값): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms. 이미지 307MB, 실행 메모리 약 43MB
 
 ---
 
