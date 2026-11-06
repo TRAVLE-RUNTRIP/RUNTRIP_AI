@@ -65,7 +65,7 @@ class Candidate(BaseModel):
 class RecommendRequest(BaseModel):
     preferences: list[Literal["NIGHT_VIEW", "ATTRACTION", "NATURE"]] = Field(min_length=1, max_length=3)
     isNight: bool
-    candidates: list[Candidate]
+    candidates: list[Candidate] = Field(max_length=2000)   # 장소는 1,480곳뿐이라 정상 요청은 넘지 않음 (API 명세 B1)
 
     @field_validator("preferences")
     @classmethod
@@ -97,4 +97,4 @@ def recommend(req: RecommendRequest):
         s = state["scorer"].score(req.preferences, req.isNight, ids, [c.detourRatio for c in req.candidates])
     except UnknownPlace as e:
         return error(422, "UNKNOWN_PLACE", f"AI 서버에 없는 장소예요 (places.csv 버전 확인): {', '.join(e.ids[:5])}")
-    return {"scores": [{"placeId": p, "score": float(v)} for p, v in zip(ids, s)]}
+    return {"scores": [{"placeId": p, "score": float(v)} for p, v in zip(ids, s, strict=True)]}

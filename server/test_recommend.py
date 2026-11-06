@@ -40,6 +40,7 @@ def errors(c):
         ("없는 취향", "/recommend", {**ok, "preferences": ["FOOD"]}, 400, "VALIDATION_ERROR"),
         ("취향 중복", "/recommend", {**ok, "preferences": ["NATURE", "NATURE"]}, 400, "VALIDATION_ERROR"),
         ("음수 우회", "/recommend", {**ok, "candidates": [{"placeId": "T1116925", "detourRatio": -1}]}, 400, "VALIDATION_ERROR"),
+        ("후보 2,001개", "/recommend", {**ok, "candidates": ok["candidates"] * 2001}, 400, "VALIDATION_ERROR"),
         ("없는 장소", "/recommend", {**ok, "candidates": [{"placeId": "NOPE", "detourRatio": 0.1}]}, 422, "UNKNOWN_PLACE"),
         ("없는 주소", "/nope", ok, 404, "RESOURCE_NOT_FOUND"),
     ]
@@ -50,7 +51,9 @@ def errors(c):
     assert r.status_code == 405 and r.json()["code"] == "METHOD_NOT_ALLOWED", r.text
     r = c.post("/recommend", json={**ok, "candidates": []})
     assert r.status_code == 200 and r.json() == {"scores": []}, r.text
-    print(f"오류 응답: {len(cases) + 2}가지 확인")
+    r = c.post("/recommend", json={**ok, "candidates": ok["candidates"] * 2000})   # 상한 2,000개까지는 정상
+    assert r.status_code == 200 and len(r.json()["scores"]) == 2000, r.status_code
+    print(f"오류 응답: {len(cases) + 3}가지 확인")
 
 
 def timing(c, ids):

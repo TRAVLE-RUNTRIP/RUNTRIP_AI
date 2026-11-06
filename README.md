@@ -39,7 +39,7 @@ uvicorn server.app:app --port 8000
 
   | code | HTTP | 상황 |
   |---|---|---|
-  | VALIDATION_ERROR | 400 | 취향이 없거나 중복·잘못된 값, `detourRatio`가 음수 |
+  | VALIDATION_ERROR | 400 | 취향이 없거나 중복·잘못된 값, `detourRatio`가 음수, 후보가 2,000개 초과 |
   | UNKNOWN_PLACE | 422 | 서빙 파일에 없는 `placeId` (BE와 `places.csv` 버전이 다름) |
   | RESOURCE_NOT_FOUND / METHOD_NOT_ALLOWED | 404 / 405 | 없는 주소·메서드 |
   | SERVER_ERROR | 500 | 그 밖의 오류 |
