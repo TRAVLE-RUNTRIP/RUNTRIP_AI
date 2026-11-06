@@ -1,0 +1,17 @@
+# AI 서버 + OSRM. 레포 루트에서  docker compose up -d --build
+# BE는 같은 Compose 네트워크에서 http://ai-server:8000, 로컬 개발은 http://127.0.0.1:8000 으로 호출
+# (localhost는 Windows에서 IPv6를 먼저 시도해 요청마다 약 2초 늦어짐).
+# 포트는 127.0.0.1에만 열어 외부에 공개하지 않음 (API 명세 B-1)
+name: runtrip
+
+include:
+  - osrm/compose.yaml
+
+services:
+  ai-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped

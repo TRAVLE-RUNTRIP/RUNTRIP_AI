@@ -22,9 +22,10 @@ PREF_QUERY = {
 
 def main():
     with (DATA / "places.csv").open(encoding="utf-8-sig") as f:
-        places = [p for p in csv.DictReader(f) if p["overview"].strip()]
+        places = list(csv.DictReader(f))
     model = SentenceTransformer("nlpai-lab/KURE-v1")
-    place_vecs = model.encode([f"{p['title']}. {p['overview']}" for p in places],
+    # 개요가 없는 장소는 이름·카테고리로 임베딩 ('장소 추천 동작 원리' 3장: 개요 부족 시 개요 + 카테고리 + 이름)
+    place_vecs = model.encode([f"{p['title']}. {p['overview'].strip() or p['category']}" for p in places],
                               batch_size=32, normalize_embeddings=True, show_progress_bar=True)
     pref_vecs = model.encode([PREF_QUERY[p] for p in PREFS], normalize_embeddings=True)
 
@@ -32,7 +33,7 @@ def main():
     (OUT / "place_ids.json").write_text(json.dumps([p["place_id"] for p in places]), encoding="utf-8")
     np.save(OUT / "place_vecs.npy", place_vecs.astype(np.float32))
     np.save(OUT / "pref_vecs.npy", pref_vecs.astype(np.float32))
-    print(f"장소 {len(places)}곳, 취향 문장 {len(PREFS)}개 임베딩 → {OUT}")
+    print(f"장소 {len(places)}곳 (개요 없음 {sum(not p['overview'].strip() for p in places)}곳), 취향 문장 {len(PREFS)}개 임베딩 → {OUT}")
 
 
 if __name__ == "__main__":
