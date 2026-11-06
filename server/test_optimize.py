@@ -58,6 +58,8 @@ def main(c):
         ("음수 거리", {**body(["A"], [0.9]), "distanceMatrixM": [[0, -1, 0], [1, 0, 1], [0, 1, 0]]}),
         ("목표 거리 0", body(ids, scores, km=0)),
         ("maxPlaces 0", body(ids, scores, max_places=0)),
+        ("장소 51곳", {**body(["A"], [0.9]), "placeIds": [f"P{i}" for i in range(51)], "scores": [0.5] * 51,
+                     "distanceMatrixM": [[0] * 53 for _ in range(53)]}),
     ]
     for name, b in bad:
         r = c.post("/optimize", json=b)

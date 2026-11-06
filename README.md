@@ -57,7 +57,8 @@ uvicorn server.app:app --port 8000
   - `excludedCombos`: 이미 보여준 조합의 장소가 모두 다시 들어가지 않게 함 (개선안 10장 "활성 변수 합 ≤ 장소 수 − 1")
   - 솔버: 제한 시간의 30%는 OR-Tools Routing으로 첫 해, 나머지는 그 해를 힌트로 CP-SAT이 개선 → 점수 합이 큰 쪽.
     Routing만 쓰면 3·5km 32건 중 28건만 최적이고 1건은 해를 놓쳐서 바꿈 (2026-11-06)
-  - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복, 음수 거리, 범위 밖 값
+  - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복·50곳 초과, 음수 거리, 범위 밖 값
+    (50곳 상한: BE는 상위 40곳을 보내고, 더 많으면 CP-SAT 모델이 커져 제한 시간 안에 좋은 해를 찾기 어려움. 후보 수를 바꾸면 같이 조정)
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`

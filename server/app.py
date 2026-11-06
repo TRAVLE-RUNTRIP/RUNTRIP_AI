@@ -91,7 +91,7 @@ class OptimizeRequest(BaseModel):
     targetKm: float = Field(gt=0, le=50)
     maxPlaces: int = Field(ge=1, le=10)
     timeLimitMs: int = Field(ge=1, le=5000)
-    placeIds: list[str] = Field(min_length=1, max_length=200)
+    placeIds: list[str] = Field(min_length=1, max_length=50)   # BE는 점수 상위 40곳을 보냄 (명세 B2). 후보 수를 바꾸면(#9) 같이 조정
     scores: list[float]
     distanceMatrixM: list[list[int]]
     excludedCombos: list[list[str]] = []
