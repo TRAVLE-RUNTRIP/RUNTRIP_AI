@@ -1,0 +1,34 @@
+# OSRM 도보 경로 서버. osrm/ 폴더에서  docker compose up -d   (Windows·Mac·Linux·EC2 같은 명령)
+# 처음 한 번은 prepare가 지도 전처리(약 1시간, 메모리 최대 4.5GB) 후 끝나고, 그다음 osrm이 뜸. 다음부턴 바로 실행.
+# 확인: http://localhost:5000/route/v1/foot/126.9918,37.5704;126.9850,37.5820
+# CH 방식: 거리표(table)가 MLD보다 약 7배 빠름 (42개 지점 70ms vs 480ms, 2026-11-06 측정)
+name: runtrip-osrm
+
+x-osrm: &osrm
+  image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+  volumes:
+    - .:/data
+
+services:
+  prepare:
+    <<: *osrm
+    # .hsgr(마지막 단계 결과)가 있으면 건너뜀. foot.lua를 바꾸면 *.osrm* 파일을 지우고 다시 실행
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        test -f /data/south-korea-latest.osm.pbf || { echo "south-korea-latest.osm.pbf 가 없습니다. README대로 받아 osrm 폴더에 두세요"; exit 1; }
+        test -f /data/south-korea-latest.osrm.hsgr && { echo "전처리 결과 있음, 건너뜀"; exit 0; }
+        osrm-extract -p /data/foot.lua /data/south-korea-latest.osm.pbf
+        osrm-contract /data/south-korea-latest.osrm
+
+  osrm:
+    <<: *osrm
+    command: osrm-routed --algorithm ch /data/south-korea-latest.osrm
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    depends_on:
+      prepare:
+        condition: service_completed_successfully

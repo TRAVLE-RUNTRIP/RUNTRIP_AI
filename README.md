@@ -14,20 +14,38 @@ WBS 2.5 안전도 스코어링 설계 · 3.11 AI 데이터 수집 · OSRM 운영
 
 ## 1. OSRM 도보 경로 서버 (osrm/)
 
-준비: Docker Desktop, 그리고 지도 파일 `south-korea-latest.osm.pbf`(약 290MB)를
-https://download.geofabrik.de/asia/south-korea.html 에서 받아 `osrm/` 폴더에 넣기.
+준비: Docker (Windows·Mac은 Docker Desktop, Linux·EC2는 Docker Engine + Compose 플러그인),
+그리고 지도 파일 `south-korea-latest.osm.pbf`(약 290MB)를 `osrm/` 폴더에 받기.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File osrm\run_osrm.ps1
+```bash
+cd osrm
+curl -LO https://download.geofabrik.de/asia/south-korea-latest.osm.pbf
+docker compose up -d          # 끄기: docker compose down
 ```
 
-- 처음 한 번은 전처리 10~30분 (Docker 메모리 8GB 기준, 실제 사용 약 2GB). 다음부턴 바로 실행.
-- 서버: http://localhost:5000 (컨테이너 이름 osrm-foot, PC 재부팅 후 자동 실행)
+- 처음 한 번은 `prepare`가 전처리(extract → contract) 후 끝나고 `osrm`이 뜸. 다음부턴 전처리를 건너뛰고 바로 실행.
+  진행 확인: `docker compose logs -f prepare`
+- 필요 사양 (2026-11-06, 8코어 PC 측정)
+
+  | 항목 | 값 |
+  |---|---|
+  | 전처리 시간 | 약 1시간 (contract 53분) |
+  | 전처리 메모리 | 최대 4.5GB (contract) → Docker 메모리 8GB 권장 |
+  | 실행 메모리 | 약 2.7GB |
+  | 디스크 | 지도 290MB + 전처리 결과 약 2.9GB |
+
+- 서버: http://localhost:5000 (PC 재부팅 후 자동 실행)
 - 경로: `/route/v1/foot/경도,위도;경도,위도?overview=full&geometries=geojson`
-- 거리 행렬(OR-Tools 입력): `/table/v1/foot/경도,위도;경도,위도;...?annotations=distance`
-- 속도: 경로 5~12ms, 20×20 거리 행렬 약 0.2초
+- 거리 행렬(OR-Tools 입력): `/table/v1/foot/경도,위도;경도,위도;...?annotations=distance,duration`
+- 속도 (`data/places.csv` 장소 40곳 + 출발·도착 = 42개 지점, 20회 중앙값)
+
+  | | 시청 | 홍대 | 강남 |
+  |---|---|---|---|
+  | 42×42 거리 행렬 | 72ms (p95 87) | 61ms (p95 75) | 64ms (p95 81) |
+
+  경로 1개는 약 15ms. 전처리 방식은 **CH**: MLD는 같은 거리 행렬이 430~490ms라 7배 느려 바꿈 (거리 차이 최대 2.8m)
 - `foot.lua` = 기본 도보 설정에서 **페리만 뺀 것**. 기본 설정은 한강버스를 경로에 넣어 시청→잠실이 25.1km로 나옴 (수정 후 13.8km).
-  설정을 바꾸면 `osrm/*.osrm*` 파일을 지우고 다시 실행.
+  설정을 바꾸면 `osrm/*.osrm*` 파일을 지우고 `docker compose up -d`로 다시 전처리.
 - EC2에도 같은 이미지(ghcr.io/project-osrm/osrm-backend:v5.27.1)·같은 명령으로 옮길 수 있음.
 
 ## 2. 조명 환경 점수 (safety/safety.py)
