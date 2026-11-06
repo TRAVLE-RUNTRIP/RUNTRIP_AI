@@ -16,6 +16,10 @@ PREF_API = {"야경": "NIGHT_VIEW", "관광 명소": "ATTRACTION", "자연·공�
 
 
 def same_as_baseline(c):
+    """features.npz가 없으면(git에 없음) 건너뛰고 False. 만드는 순서는 README 'AI 서버' 서빙 파일 항목"""
+    if not (DATA / "features.npz").exists():
+        print("규칙 기준선과 비교: 건너뜀 (data/features.npz 없음 → README 순서대로 embed_kure.py → build_serving.py → features.py 먼저)")
+        return False
     queries = [json.loads(line) for line in (DATA / "queries.jsonl").read_text(encoding="utf-8").splitlines() if line]
     d = np.load(DATA / "features.npz")
     base = rule_baseline(d["X"])
@@ -31,6 +35,7 @@ def same_as_baseline(c):
         worst = max(worst, float(np.abs(got - base[qi, :len(got)]).max()))
     print(f"규칙 기준선과 비교: 쿼리 {len(queries)}건, 점수 최대 차이 {worst:.2e}")
     assert worst < 1e-6
+    return True
 
 
 def errors(c):
@@ -70,6 +75,7 @@ def timing(c, ids):
 
 if __name__ == "__main__":
     with TestClient(app) as c:
-        same_as_baseline(c)
+        compared = same_as_baseline(c)
         errors(c)
         timing(c, list(state["scorer"].index))
+    print("점검 통과" if compared else "점검 통과 (단, 규칙 기준선 비교는 안 함)")
