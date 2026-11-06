@@ -6,6 +6,7 @@
    첫 해를 빨리 찾지만 최적은 보장하지 않음
 2) CP-SAT: 같은 문제를 회로 제약(AddCircuit)으로 정확히 풀고, Routing 해를 힌트로 받아 남은 시간 동안 개선
 → 둘 중 점수 합이 큰 쪽. 결과가 ±10% 밖이거나 장소가 0곳이면 found = False
+점수가 음수인 장소는 피하되, 다른 장소로 거리를 맞출 수 없을 때만 넣음 (완전히 빼면 코스가 안 나오는 경우가 늘어서)
 excludedCombos: 조합의 활성 변수 합 ≤ 장소 수 − 1 (개선안 10장)
 """
 import time
@@ -25,9 +26,14 @@ def bounds(target_km):
     return round(target_km * 1000 * (1 - TOLERANCE)), round(target_km * 1000 * (1 + TOLERANCE))
 
 
+def weights(scores):
+    """점수 × 1000 (음수 그대로). 음수 장소는 넣을수록 손해라 다른 방법으로 거리를 맞출 수 없을 때만 들어감"""
+    return [round(s * SCORE_SCALE) for s in scores]
+
+
 def penalties(scores):
-    # 점수가 음수면 0 = 넣을 이유가 없는 장소 (MLP 점수는 음수일 수 있음)
-    return [max(0, round(s * SCORE_SCALE)) for s in scores]
+    # Routing penalty는 음수를 받지 않아 0으로 (= 넣을 이유가 없는 장소). 마지막 비교는 weights로 함
+    return [max(0, w) for w in weights(scores)]
 
 
 def usable(combo, pos):
@@ -101,8 +107,8 @@ def cpsat_solve(target_km, max_places, time_ms, place_ids, scores, dist, exclude
     for combo in excluded:
         if usable(combo, pos):
             md.Add(sum(active[pos[p]] for p in set(combo)) <= len(set(combo)) - 1)
-    w = penalties(scores)
-    md.Maximize(10000 * sum(w[i - 1] * active[i] for i in active) - total)   # 점수 합 우선, 같으면 짧은 쪽
+    w = weights(scores)
+    md.Maximize(10000 * sum(w[i - 1] * active[i] for i in active) - total)   # 점수 합 우선(음수는 손해), 같으면 짧은 쪽
     if hint:
         seq = [S, *[pos[p] for p in hint], E]
         on = set(zip(seq, seq[1:]))
@@ -138,8 +144,8 @@ def solve(target_km, max_places, time_limit_ms, place_ids, scores, dist, exclude
     first = first if ok(first) else None
     left = time_limit_ms - (time.perf_counter() - t0) * 1000 - MARGIN_MS
     better = cpsat_solve(target_km, max_places, left, place_ids, scores, dist, excluded, first) if left > 10 else None
-    w = penalties(scores)
-    gain = lambda o: sum(w[idx[p] - 1] for p in o)
+    w = weights(scores)
+    gain = lambda o: sum(w[idx[p] - 1] for p in o)        # 실제 점수 합 (음수 장소가 끼면 그만큼 낮게 봄)
     candidates = [o for o in (better, first) if ok(o)]
     if not candidates:
         return False, [], 0

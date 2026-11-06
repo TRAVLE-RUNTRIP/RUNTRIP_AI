@@ -42,9 +42,15 @@ def main(c):
     r = c.post("/optimize", json=body(ids, scores, km=5, max_places=1)).json()
     assert not r["found"] or len(r["orderedPlaceIds"]) == 1, r
 
-    # 음수 점수 장소는 넣지 않음 (손해가 0이라 들를 이유가 없음)
+    # 음수 점수 장소는 피함: A만으로 3km가 맞으면 C(음수)는 넣지 않음
     r = c.post("/optimize", json=body(["A", "C"], [0.9, -0.5], km=3)).json()
     assert r["found"] and r["orderedPlaceIds"] == ["A"], r
+    # E만(4.4km)과 E+B(4.8km) 둘 다 거리는 맞음 → 음수인 B를 뺀 E만
+    r = c.post("/optimize", json=body(["B", "E"], [-0.5, 0.7], km=4.6)).json()
+    assert r["found"] and r["orderedPlaceIds"] == ["E"], r
+    # 다른 방법이 없으면 넣음: D(2km)로는 5km가 안 되고 B(음수) 왕복 4.8km만 가능 → 코스를 못 만드는 것보다 나음
+    r = c.post("/optimize", json=body(["D", "B"], [0.9, -0.5], km=5)).json()
+    assert r["found"] and r["orderedPlaceIds"] == ["B"] and r["totalKm"] == 4.8, r
 
     # 답이 없음: 가장 먼 장소를 왕복해도 목표의 90%에 못 미침
     r = c.post("/optimize", json=body(["D"], [0.9], km=10)).json()
