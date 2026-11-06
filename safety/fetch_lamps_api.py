@@ -1,9 +1,9 @@
 """전국보안등정보표준데이터 API로 서울 구별 보안등을 받아 lamps/서울특별시_OO구_보안등정보.csv로 저장합니다.
 파일 형식은 공공데이터포털 파일 다운로드와 같아 geocode_lamps.py · merge_lamps.py를 그대로 씁니다. 이미 있는 파일은 덮지 않습니다.
 사용: (환경 변수 DATA_GO_KR_KEY 필요)  python fetch_lamps_api.py [구 이름 ...]   → python geocode_lamps.py → python merge_lamps.py lamps_geo"""
-import csv, json, os, sys, time, urllib.parse, urllib.request
+import csv, json, os, sys, time, urllib.error, urllib.parse, urllib.request
 
-URL = "http://api.data.go.kr/openapi/tn_pubr_public_scrty_lmp_api"
+URL = "https://api.data.go.kr/openapi/tn_pubr_public_scrty_lmp_api"
 # 2026-11-05 확인: 좌표 있는 15개 구 + 주소만 있는 강남·송파(지오코딩 필요). 종로·중구·마포·용산은 기존 파일 사용
 # 제외: 도봉(500건, 2018) · 서대문(463건, 2020) · 성동(37건, 아파트 단지)은 일부만 있어 그 구 전체가 '적음'으로 잘못 나옴, 동대문은 API에 없음
 GU = ["강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구", "노원구", "동작구", "서초구",
@@ -14,12 +14,22 @@ COLS = {"보안등위치명": "lmpLcNm", "설치개수": "installationCo", "소�
 ROWS = 1000
 
 
+class HttpsOnly(urllib.request.HTTPRedirectHandler):
+    """주소에 서비스 키가 실려 있으므로 http로 넘어가는 리다이렉트는 따라가지 않음"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise urllib.error.URLError("https가 아닌 주소로 리다이렉트되어 중단")   # newurl에 키가 있을 수 있어 출력하지 않음
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+OPEN = urllib.request.build_opener(HttpsOnly).open
+
 def page(key, inst, no):
     q = urllib.parse.urlencode({"serviceKey": key, "type": "json", "pageNo": no, "numOfRows": ROWS, "institutionNm": inst})
     for wait in (0, 5, 15, 45):                 # 공공데이터포털은 가끔 응답 없이 끊김 → 대기 후 재시도
         time.sleep(wait)
         try:
-            with urllib.request.urlopen(f"{URL}?{q}", timeout=60) as r:
+            with OPEN(f"{URL}?{q}", timeout=60) as r:
                 d = json.load(r)
             if d["header"]["resultCode"] == "03":    # NODATA: 이 관리기관명으로는 자료 없음
                 return 0, []
