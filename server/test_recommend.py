@@ -1,4 +1,4 @@
-"""/recommend 점검. 레포 루트에서  python -m server.test_recommend
+"""/recommend 점검. 레포 루트에서  pip install -r server/requirements-dev.txt  →  python -m server.test_recommend
 1) data/queries.jsonl 전체를 API로 보내 data/features.npz의 규칙 기준선 점수와 같은지 (features.py를 같은 KURE 결과로 다시 만든 뒤)
 2) 오류 응답 형식 {code, message}
 3) 후보 수별 응답 시간 (서버 안 처리 시간, TestClient)"""
@@ -16,7 +16,7 @@ PREF_API = {"야경": "NIGHT_VIEW", "관광 명소": "ATTRACTION", "자연·공�
 
 
 def same_as_baseline(c):
-    queries = [json.loads(l) for l in (DATA / "queries.jsonl").read_text(encoding="utf-8").splitlines() if l]
+    queries = [json.loads(line) for line in (DATA / "queries.jsonl").read_text(encoding="utf-8").splitlines() if line]
     d = np.load(DATA / "features.npz")
     base = rule_baseline(d["X"])
     worst = 0.0

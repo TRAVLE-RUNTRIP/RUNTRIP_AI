@@ -46,7 +46,7 @@ uvicorn server.app:app --port 8000
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
-- 점검 `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
+- 점검 `pip install -r server/requirements-dev.txt` → `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
 - 측정 (2026-11-06, Docker 컨테이너에 HTTP로 20회 중앙값): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms. 이미지 307MB, 실행 메모리 약 43MB
 
 ---
