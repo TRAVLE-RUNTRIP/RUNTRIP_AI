@@ -6,7 +6,8 @@
    첫 해를 빨리 찾지만 최적은 보장하지 않음
 2) CP-SAT: 같은 문제를 회로 제약(AddCircuit)으로 정확히 풀고, Routing 해를 힌트로 받아 남은 시간 동안 개선
 → 둘 중 점수 합이 큰 쪽. 결과가 ±10% 밖이거나 장소가 0곳이면 found = False
-점수가 음수인 장소는 피하되, 다른 장소로 거리를 맞출 수 없을 때만 넣음 (완전히 빼면 코스가 안 나오는 경우가 늘어서)
+점수가 음수인 장소도 점수 합에 그대로 반영(넣을수록 손해) → 점수 합을 더 높이거나(더 좋은 장소로 가는 길목) 거리를 맞출 때만 들어감.
+완전히 빼지 않는 이유: 빼면 거리를 못 맞춰 코스가 안 나오는 경우가 늘어서
 excludedCombos: 조합의 활성 변수 합 ≤ 장소 수 − 1 (개선안 10장)
 """
 import time
@@ -27,8 +28,9 @@ def bounds(target_km):
 
 
 def weights(scores):
-    """점수 × 1000 (음수 그대로). 음수 장소는 넣을수록 손해라 다른 방법으로 거리를 맞출 수 없을 때만 들어감"""
-    return [round(s * SCORE_SCALE) for s in scores]
+    """점수 × 1000 (음수 그대로). 음수 장소는 넣을수록 손해라, 점수 합을 더 높이거나 거리를 맞출 때만 들어감.
+    0에 아주 가까운 음수(−0.0004 등)도 0이 되지 않게 최소 −1"""
+    return [min(-1, round(s * SCORE_SCALE)) if s < 0 else round(s * SCORE_SCALE) for s in scores]
 
 
 def penalties(scores):

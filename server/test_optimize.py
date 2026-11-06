@@ -48,6 +48,10 @@ def main(c):
     # E만(4.4km)과 E+B(4.8km) 둘 다 거리는 맞음 → 음수인 B를 뺀 E만
     r = c.post("/optimize", json=body(["B", "E"], [-0.5, 0.7], km=4.6)).json()
     assert r["found"] and r["orderedPlaceIds"] == ["E"], r
+    # 0에 아주 가까운 음수도 손해로 봄: E(−0.0004, 4.4km)와 B(0, 4.8km) 둘 다 거리는 맞음 → 더 먼 B
+    # (−0.0004가 0으로 반올림되면 둘이 같은 점수가 되어 짧은 E를 고르게 됨)
+    r = c.post("/optimize", json=body(["B", "E"], [0.0, -0.0004], km=4.6, max_places=1)).json()
+    assert r["found"] and r["orderedPlaceIds"] == ["B"], r
     # 다른 방법이 없으면 넣음: D(2km)로는 5km가 안 되고 B(음수) 왕복 4.8km만 가능 → 코스를 못 만드는 것보다 나음
     r = c.post("/optimize", json=body(["D", "B"], [0.9, -0.5], km=5)).json()
     assert r["found"] and r["orderedPlaceIds"] == ["B"] and r["totalKm"] == 4.8, r
