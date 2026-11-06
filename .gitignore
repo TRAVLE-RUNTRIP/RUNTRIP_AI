@@ -14,7 +14,7 @@ cache/
 # OSRM 지도·전처리 파일(약 3GB)은 README대로 받아서 만듦
 osrm/*
 !osrm/foot.lua
-!osrm/run_osrm.ps1
+!osrm/compose.yaml
 # 기획 문서·발표 자료
 *.pptx
 *.docx
