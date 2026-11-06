@@ -23,6 +23,8 @@ python poc/evaluate.py                     # 규칙 기준선 valid 성능
 python poc/train.py --loss A --lr 1e-3 --dropout 0.1 --seed 0
 ```
 
+결과는 `poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}.json`과 같은 이름의 `.pt`(최적 epoch 가중치, `/recommend` 서빙용)로 저장돼요.
+
 ## 파일
 
 | 파일 | 내용 | 수정 |
