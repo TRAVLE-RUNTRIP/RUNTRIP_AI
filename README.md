@@ -114,6 +114,9 @@ docker compose up -d          # 끄기: docker compose down
 - `foot.lua` = 기본 도보 설정에서 **페리만 뺀 것**. 기본 설정은 한강버스를 경로에 넣어 시청→잠실이 25.1km로 나옴 (수정 후 13.8km).
   설정을 바꾸면 `osrm/` 폴더에서 `docker compose down` → `*.osrm*` 파일 삭제 → `docker compose up -d` (다시 전처리 후 실행).
 - EC2에도 같은 이미지(ghcr.io/project-osrm/osrm-backend:v5.27.1)·같은 명령으로 옮길 수 있음.
+  - 사양: 메모리 8GB 이상(t3.large급, 실행만 OSRM 2.7GB + AI 서버 약 82MB + BE), 디스크 20GB 이상. x86 기준 (ARM/Graviton은 OSRM 이미지 지원 확인 필요)
+  - 전처리 건너뛰기: PC에서 만든 `osrm/south-korea-latest.osm.pbf`와 `south-korea-latest.osrm.*` 파일(약 3.7GB)을 EC2의 `osrm/` 폴더로 복사하면 `prepare`가 바로 끝남
+  - 포트: AI 서버(8000)·OSRM(5000) 모두 127.0.0.1에만 열림. BE 컨테이너는 같은 Compose 네트워크(`runtrip_default`)에서 `http://ai-server:8000`, `http://osrm:5000`으로 호출
 
 ## 2. 조명 환경 점수 (safety/safety.py)
 

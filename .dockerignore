@@ -1,0 +1,7 @@
+# AI 서버 이미지에 필요한 파일만 빌드 컨텍스트로 보냄 (server/Dockerfile의 COPY 대상)
+# 없으면 osrm/ 지도·전처리 파일(약 4GB)과 문서까지 빌드마다 Docker로 넘어감
+*
+!server/
+!poc/features.py
+!poc/evaluate.py
+**/__pycache__
