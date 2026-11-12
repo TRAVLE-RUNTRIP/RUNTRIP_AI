@@ -117,6 +117,7 @@ docker compose up -d          # 끄기: docker compose down
   - 사양: 메모리 8GB 이상(t3.large급, 실행만 OSRM 2.7GB + AI 서버 약 82MB + BE), 디스크 20GB 이상. x86 기준 (ARM/Graviton은 OSRM 이미지 지원 확인 필요)
   - 전처리 건너뛰기: PC에서 만든 `osrm/south-korea-latest.osm.pbf`와 `south-korea-latest.osrm.*` 파일(약 3.7GB)을 EC2의 `osrm/` 폴더로 복사하면 `prepare`가 바로 끝남
   - 포트: AI 서버(8000)·OSRM(5000) 모두 127.0.0.1에만 열림. BE 컨테이너는 같은 Compose 네트워크(`runtrip_default`)에서 `http://ai-server:8000`, `http://osrm:5000`으로 호출
+  - AI 서버와 OSRM을 함께 실행하려면 레포 루트에서 `docker compose up -d --build`를 실행하고, BE 컨테이너를 `runtrip_default`에 연결. `osrm/`에서 따로 실행 중이면 먼저 그 폴더에서 `docker compose down` 실행
 
 ## 2. 조명 환경 점수 (safety/safety.py)
 
