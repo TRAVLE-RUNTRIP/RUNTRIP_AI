@@ -1,9 +1,10 @@
 """팀원 채점 결과와 Claude 점수 비교.
 
 실행: python data/review/compare_review.py data/review/이민구.xlsx [다른 팀원 시트.xlsx ...]
+      새 장소 검수: ... --key data/review/answer_key_new.csv 시트.xlsx
 지표: 정확히 일치, ±1점 이내, 가중 카파(quadratic weighted kappa, 1=완전 일치, 0=우연 수준)
 """
-import csv, sys
+import argparse, csv
 from pathlib import Path
 
 KEY = Path(__file__).parent / "answer_key.csv"
@@ -51,8 +52,12 @@ def compare(name_a, a, name_b, b):
 
 
 def main():
-    claude = read(KEY, "Claude 점수")
-    sheets = {Path(p).stem: read(p, "팀원 점수(0~3)") for p in sys.argv[1:]}
+    ap = argparse.ArgumentParser()
+    ap.add_argument("sheets", nargs="+")
+    ap.add_argument("--key", default=KEY)
+    args = ap.parse_args()
+    claude = read(args.key, "Claude 점수")
+    sheets = {Path(p).stem: read(p, "팀원 점수(0~3)") for p in args.sheets}
     for name, s in sheets.items():
         compare(name, s, "Claude", claude)
     names = list(sheets)
