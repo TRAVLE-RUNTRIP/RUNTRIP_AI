@@ -3,7 +3,7 @@
    모델 점수 = sigmoid(MLP + 가산점 × 취향 일치). 모델 파일이 없을 때 규칙 기준선으로 대신하는지도 확인
 2) 오류 응답 형식 {code, message}
 3) 후보 수별 응답 시간 (서버 안 처리 시간, TestClient)"""
-import json, time
+import json, tempfile, time
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +45,11 @@ def same_as_training(c):
     got = rule.score([PREF_API[p] for p in q["prefs"]], q["time_slot"] == "night", [x["place_id"] for x in q["candidates"]],
                      [x["detour_km"] / q["target_km"] for x in q["candidates"]])
     assert rule.model is None and np.abs(got - rule_baseline(d["X"][0, :len(got)])).max() < 1e-6
-    print("모델 파일이 없을 때 규칙 기준선으로 대신: 확인")
+    with tempfile.TemporaryDirectory() as tmp:   # 가산점(pref_bonus)이 빠진 모델 파일도 규칙 기준선으로
+        broken = Path(tmp) / "m.npz"
+        np.savez(broken, **{k: v for k, v in w.items() if k != "pref_bonus"})
+        assert Scorer(model=broken).model is None
+    print("모델 파일이 없거나 가산점이 빠졌을 때 규칙 기준선으로 대신: 확인")
     return True
 
 
