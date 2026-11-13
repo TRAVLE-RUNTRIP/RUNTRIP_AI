@@ -3,7 +3,7 @@
 실행 예: python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0
          (튜닝이 끝난 설정으로만) python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0 --test
 결과: poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}[_pb{bonus}].json, 같은 이름 .pt (최적 epoch 가중치, /recommend 서빙용)
-최종 설정(#6): --loss A --lr 1e-3 --dropout 0.1 --pref-bonus 2.0 (서빙 점수 = 모델 점수 + 2 × 취향 일치)
+최종 설정(#6): --loss A --lr 1e-3 --dropout 0.3 --pref-bonus 2.0 (서빙 점수 = 모델 점수 + 2 × 취향 일치)
 """
 import argparse, json, random, time
 from pathlib import Path
