@@ -2,7 +2,8 @@
 
 실행 예: python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0
          (튜닝이 끝난 설정으로만) python poc/train.py --loss C --lr 1e-3 --dropout 0.1 --seed 0 --test
-결과: poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}.json, 같은 이름 .pt (최적 epoch 가중치, /recommend 서빙용)
+결과: poc/runs/{loss}_lr{lr}_do{dropout}_s{seed}[_pb{bonus}].json, 같은 이름 .pt (최적 epoch 가중치, /recommend 서빙용)
+최종 설정(#6): --loss A --lr 1e-3 --dropout 0.3 --pref-bonus 2.0 (서빙 점수 = 모델 점수 + 2 × 취향 일치)
 """
 import argparse, json, random, time
 from pathlib import Path
@@ -69,15 +70,18 @@ def main(args):
                 break
 
     model.load_state_dict(best_state)
+    # 취향 일치 장소 가산점: 학습·epoch 선택에는 쓰지 않고 최종 점수에만 더한다 (서빙도 같은 식)
+    score = lambda X: predict(model, X) + args.pref_bonus * ev.pref_match(X)
     result = {"args": vars(args), "best_epoch": best_epoch,
-              "valid": ev.evaluate(predict(model, Xva), Xva, rva, mva)}
+              "valid": ev.evaluate(score(Xva), Xva, rva, mva)}
     if args.test:
         Xte, rte, mte = ev.load("test")
-        result["test"] = ev.evaluate(predict(model, Xte), Xte, rte, mte)
+        result["test"] = ev.evaluate(score(Xte), Xte, rte, mte)
         result["inference_ms"] = inference_ms(model, Xte)
 
     RUNS.mkdir(exist_ok=True)
-    out = RUNS / f"{args.loss}_lr{args.lr}_do{args.dropout}_s{args.seed}.json"
+    pb = f"_pb{args.pref_bonus}" if args.pref_bonus else ""
+    out = RUNS / f"{args.loss}_lr{args.lr}_do{args.dropout}_s{args.seed}{pb}.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     torch.save({"state_dict": best_state, "d": Xtr.shape[-1], "dropout": args.dropout}, out.with_suffix(".pt"))
     print(json.dumps({k: v for k, v in result.items() if k != "args"}, ensure_ascii=False))
@@ -93,4 +97,5 @@ if __name__ == "__main__":
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--patience", type=int, default=10)
     ap.add_argument("--test", action="store_true")
+    ap.add_argument("--pref-bonus", type=float, default=0.0, help="취향 일치 장소 가산점 (valid로 정함)")
     main(ap.parse_args())

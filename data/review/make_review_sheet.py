@@ -3,8 +3,9 @@
 - Claude 점수별 25쌍씩 층화 추출 (0~3점이 고르게 나오게), 같은 장소는 한 번만
 - label_review_sheet.xlsx: 팀원이 '팀원 점수' 열만 채움 (0~3 목록에서 선택)
 - answer_key.csv: Claude 점수 (채점이 끝날 때까지 열지 않기)
+- --new: 나중에 채점한 장소(labeling/scores/batch_12~16)만, 점수별 10쌍 → *_new.xlsx/csv (기존 검수 파일 유지)
 """
-import csv, json, math, random
+import argparse, csv, json, math, random
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -14,13 +15,17 @@ from openpyxl.worksheet.datavalidation import DataValidation
 DATA = Path(__file__).parent.parent
 OUT = Path(__file__).parent
 SEED, PER_LABEL = 7, 25
+NEW_BATCHES, NEW_PER_LABEL = range(12, 17), 10
 DESC_WIDTH = 100
 HEADER = ["번호", "취향", "시간대", "목표 거리(km)", "우회 거리(km)", "우회/목표", "장소", "카테고리", "야경명소",
           "장소 설명", "팀원 점수(0~3)", "메모"]
 
 
-def main():
+def main(new=False):
     rng = random.Random(SEED)
+    per_label, suffix = (NEW_PER_LABEL, "_new") if new else (PER_LABEL, "")
+    only = {l.split(",")[0] for b in NEW_BATCHES
+            for l in (DATA / f"labeling/scores/batch_{b}.csv").read_text(encoding="utf-8").splitlines() if l} if new else None
     with (DATA / "places.csv").open(encoding="utf-8-sig") as f:
         places = {p["place_id"]: p for p in csv.DictReader(f)}
     queries = {json.loads(l)["query_id"]: json.loads(l) for l in (DATA / "queries.jsonl").read_text(encoding="utf-8").splitlines() if l}
@@ -30,6 +35,8 @@ def main():
     for r in labels:
         q = queries[r["query_id"]]
         for c in q["candidates"]:
+            if only is not None and c["place_id"] not in only:
+                continue
             by_label[r["labels"][c["place_id"]]].append((q, c))
 
     picked, used = [], set()
@@ -42,12 +49,12 @@ def main():
             used.add(c["place_id"])
             picked.append((q, c, k))
             n += 1
-            if n == PER_LABEL:
+            if n == per_label:
                 break
     rng.shuffle(picked)
 
-    sheet = OUT / "label_review_sheet.xlsx"
-    key = OUT / "answer_key.csv"
+    sheet = OUT / f"label_review_sheet{suffix}.xlsx"
+    key = OUT / f"answer_key{suffix}.csv"
     wb = Workbook()
     ws = wb.active
     ws.title = "채점"
@@ -87,4 +94,6 @@ def format_sheet(ws, n):
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--new", action="store_true", help="batch_12~16 장소만 (점수별 10쌍)")
+    main(ap.parse_args().new)
