@@ -72,7 +72,8 @@ uvicorn server.app:app --port 8000
   - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
 - 측정 (2026-11-06)
   - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값, 규칙 기준선 시절): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
-  - `/recommend` MLP (2026-11-13, 서버 안 처리 시간 TestClient 20회 중앙값): 후보 40곳 2.8ms · 200곳 3.7ms · 1,480곳 7.6ms
+  - `/recommend` MLP (2026-11-13, Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 7.9ms · 200곳 6.6ms · 1,480곳 20.4ms (최대 57.6ms).
+    서버 안 처리 시간(TestClient)은 40곳 2.8ms · 200곳 3.7ms · 1,480곳 7.6ms
   - `/optimize` (`bench_optimize`, 후보 상위 40곳, 제한 500ms): 48건 중 47건 해를 찾음 (못 찾은 1건은 완전 탐색으로도 답이 없음),
     찾은 코스 모두 목표 ±10%·OSRM 실제 경로 거리와 같음, 3·5km 32건 전부 최적, 다시 만들기 128/141, 응답 중앙값 421ms · 최대 603ms
   - 이미지 539MB (OR-Tools 포함), 실행 메모리 약 82MB
