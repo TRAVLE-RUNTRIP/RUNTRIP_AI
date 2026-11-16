@@ -49,7 +49,10 @@ def same_as_training(c):
         broken = Path(tmp) / "m.npz"
         np.savez(broken, **{k: v for k, v in w.items() if k != "pref_bonus"})
         assert Scorer(model=broken).model is None
-    print("모델 파일이 없거나 가산점이 빠졌을 때 규칙 기준선으로 대신: 확인")
+        for bad in (np.nan, np.inf):   # 가산점이 nan·inf여도 규칙 기준선으로
+            np.savez(broken, **{**w, "pref_bonus": np.float32(bad)})
+            assert Scorer(model=broken).model is None
+    print("모델 파일이 없거나 가산점이 빠졌거나 nan·inf일 때 규칙 기준선으로 대신: 확인")
     return True
 
 

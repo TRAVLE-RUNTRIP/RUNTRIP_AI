@@ -29,7 +29,8 @@ def load_model(path=MODEL):
     try:
         w = dict(np.load(path))
         mlp_logit(w, np.zeros((1, len(FEATURES)), np.float32))   # 모양이 맞는지 미리 확인
-        float(w["pref_bonus"])                                    # 가산점이 없으면 요청마다 실패하므로 여기서 규칙 점수로
+        if not np.isfinite(float(w["pref_bonus"])):               # 가산점이 없거나 nan·inf면 요청마다 실패하므로 여기서 규칙 점수로
+            raise ValueError("pref_bonus is not finite")
         return w
     except Exception as e:
         log.warning("추천 모델을 읽지 못해 규칙 점수로 대신합니다: %s (%s)", path, e)
