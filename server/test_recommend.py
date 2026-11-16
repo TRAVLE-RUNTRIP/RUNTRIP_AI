@@ -45,15 +45,22 @@ def same_as_training(c):
     got = rule.score([PREF_API[p] for p in q["prefs"]], q["time_slot"] == "night", [x["place_id"] for x in q["candidates"]],
                      [x["detour_km"] / q["target_km"] for x in q["candidates"]])
     assert rule.model is None and np.abs(got - rule_baseline(d["X"][0, :len(got)])).max() < 1e-6
-    with tempfile.TemporaryDirectory() as tmp:   # 가산점(pref_bonus)이 빠진 모델 파일도 규칙 기준선으로
+    print("모델 파일이 없을 때 규칙 기준선으로 대신: 확인")
+    return True
+
+
+def bad_bonus_falls_back():
+    """가산점(pref_bonus)이 빠졌거나 nan·inf인 모델 파일은 규칙 기준선으로. features.npz 없이도 실행"""
+    w = state["scorer"].model
+    assert w is not None, "server/data/recommend_model.npz를 읽지 못함"
+    with tempfile.TemporaryDirectory() as tmp:
         broken = Path(tmp) / "m.npz"
         np.savez(broken, **{k: v for k, v in w.items() if k != "pref_bonus"})
         assert Scorer(model=broken).model is None
-        for bad in (np.nan, np.inf):   # 가산점이 nan·inf여도 규칙 기준선으로
+        for bad in (np.nan, np.inf):
             np.savez(broken, **{**w, "pref_bonus": np.float32(bad)})
             assert Scorer(model=broken).model is None
-    print("모델 파일이 없거나 가산점이 빠졌거나 nan·inf일 때 규칙 기준선으로 대신: 확인")
-    return True
+    print("가산점이 빠졌거나 nan·inf일 때 규칙 기준선으로 대신: 확인")
 
 
 def errors(c):
@@ -94,6 +101,7 @@ def timing(c, ids):
 if __name__ == "__main__":
     with TestClient(app) as c:
         compared = same_as_training(c)
+        bad_bonus_falls_back()
         errors(c)
         timing(c, list(state["scorer"].index))
     print("점검 통과" if compared else "점검 통과 (단, 학습 때 점수 비교는 안 함)")
