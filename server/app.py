@@ -123,7 +123,7 @@ def health():
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(req: RecommendRequest):
-    """B1. 후보 장소 점수 (지금은 규칙 기준선, #7에서 MLP로 교체). 점수가 높을수록 추천"""
+    """B1. 후보 장소 점수 0~1 (MLP, 모델이 없으면 규칙 기준선). 점수가 높을수록 추천"""
     ids = [c.placeId for c in req.candidates]
     try:
         s = state["scorer"].score(req.preferences, req.isNight, ids, [c.detourRatio for c in req.candidates])

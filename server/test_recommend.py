@@ -1,28 +1,32 @@
 """/recommend 점검. 레포 루트에서  pip install -r server/requirements-dev.txt  →  python -m server.test_recommend
-1) data/queries.jsonl 전체를 API로 보내 data/features.npz의 규칙 기준선 점수와 같은지 (features.py를 같은 KURE 결과로 다시 만든 뒤)
+1) data/queries.jsonl 전체를 API로 보내 data/features.npz로 계산한 학습 때 점수와 같은지 (features.py를 같은 KURE 결과로 다시 만든 뒤)
+   모델 점수 = sigmoid(MLP + 가산점 × 취향 일치). 모델 파일이 없을 때 규칙 기준선으로 대신하는지도 확인
 2) 오류 응답 형식 {code, message}
 3) 후보 수별 응답 시간 (서버 안 처리 시간, TestClient)"""
-import json, time
+import json, tempfile, time
 from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
 
-from poc.evaluate import rule_baseline
+from poc.evaluate import pref_match, rule_baseline
 from server.app import app, state
+from server.scoring import Scorer, mlp_logit
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 PREF_API = {"야경": "NIGHT_VIEW", "관광 명소": "ATTRACTION", "자연·공원": "NATURE"}
 
 
-def same_as_baseline(c):
+def same_as_training(c):
     """features.npz가 없으면(git에 없음) 건너뛰고 False. 만드는 순서는 README 'AI 서버' 서빙 파일 항목"""
     if not (DATA / "features.npz").exists():
-        print("규칙 기준선과 비교: 건너뜀 (data/features.npz 없음 → README 순서대로 embed_kure.py → build_serving.py → features.py 먼저)")
+        print("학습 때 점수와 비교: 건너뜀 (data/features.npz 없음 → README 순서대로 embed_kure.py → build_serving.py → features.py 먼저)")
         return False
     queries = [json.loads(line) for line in (DATA / "queries.jsonl").read_text(encoding="utf-8").splitlines() if line]
     d = np.load(DATA / "features.npz")
-    base = rule_baseline(d["X"])
+    w = state["scorer"].model
+    assert w is not None, "server/data/recommend_model.npz를 읽지 못함"
+    base = 1 / (1 + np.exp(-(mlp_logit(w, d["X"]) + w["pref_bonus"] * pref_match(d["X"]))))
     worst = 0.0
     for qi, q in enumerate(queries):
         assert d["query_ids"][qi] == q["query_id"]
@@ -33,9 +37,30 @@ def same_as_baseline(c):
         got = np.array([s["score"] for s in r.json()["scores"]])
         assert [s["placeId"] for s in r.json()["scores"]] == [x["place_id"] for x in q["candidates"]]
         worst = max(worst, float(np.abs(got - base[qi, :len(got)]).max()))
-    print(f"규칙 기준선과 비교: 쿼리 {len(queries)}건, 점수 최대 차이 {worst:.2e}")
+    print(f"학습 때 점수와 비교: 쿼리 {len(queries)}건, 점수 최대 차이 {worst:.2e}")
     assert worst < 1e-6
+
+    q = queries[0]   # 모델 파일이 없으면 규칙 기준선으로 대신
+    rule = Scorer(model=DATA / "없는_모델.npz")
+    got = rule.score([PREF_API[p] for p in q["prefs"]], q["time_slot"] == "night", [x["place_id"] for x in q["candidates"]],
+                     [x["detour_km"] / q["target_km"] for x in q["candidates"]])
+    assert rule.model is None and np.abs(got - rule_baseline(d["X"][0, :len(got)])).max() < 1e-6
+    print("모델 파일이 없을 때 규칙 기준선으로 대신: 확인")
     return True
+
+
+def bad_bonus_falls_back():
+    """가산점(pref_bonus)이 빠졌거나 nan·inf인 모델 파일은 규칙 기준선으로. features.npz 없이도 실행"""
+    w = state["scorer"].model
+    assert w is not None, "server/data/recommend_model.npz를 읽지 못함"
+    with tempfile.TemporaryDirectory() as tmp:
+        broken = Path(tmp) / "m.npz"
+        np.savez(broken, **{k: v for k, v in w.items() if k != "pref_bonus"})
+        assert Scorer(model=broken).model is None
+        for bad in (np.nan, np.inf):
+            np.savez(broken, **{**w, "pref_bonus": np.float32(bad)})
+            assert Scorer(model=broken).model is None
+    print("가산점이 빠졌거나 nan·inf일 때 규칙 기준선으로 대신: 확인")
 
 
 def errors(c):
@@ -75,7 +100,8 @@ def timing(c, ids):
 
 if __name__ == "__main__":
     with TestClient(app) as c:
-        compared = same_as_baseline(c)
+        compared = same_as_training(c)
+        bad_bonus_falls_back()
         errors(c)
         timing(c, list(state["scorer"].index))
-    print("점검 통과" if compared else "점검 통과 (단, 규칙 기준선 비교는 안 함)")
+    print("점검 통과" if compared else "점검 통과 (단, 학습 때 점수 비교는 안 함)")

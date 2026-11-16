@@ -11,7 +11,7 @@
 
 # AI 서버 (server/)
 
-API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, PoC 규칙 기준선, #7에서 MLP로 교체)와 `POST /optimize`(B2)가 있어요.
+API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, 추천 모델 점수)와 `POST /optimize`(B2)가 있어요.
 
 ```bash
 docker compose up -d --build        # 레포 루트: AI 서버(127.0.0.1:8000) + OSRM(5000). OSRM 전처리는 아래 1장
@@ -30,11 +30,15 @@ uvicorn server.app:app --port 8000
   // 요청
   {"preferences": ["NIGHT_VIEW", "NATURE"], "isNight": true,
    "candidates": [{"placeId": "T1116925", "detourRatio": 0.42}]}
-  // 응답 (후보 순서 그대로, 높을수록 추천)
+  // 응답 (후보 순서 그대로, 0~1, 높을수록 추천)
   {"scores": [{"placeId": "T1116925", "score": 0.92}]}
   ```
 
-  점수 = 고른 취향 중 KURE 유사도 최댓값 + 0.3 × 취향 일치 − 0.3 × `detourRatio` (`poc/evaluate.py` `rule_baseline`, 가중치 고정)
+  점수 = sigmoid(MLP 점수 + 2 × 취향 일치) (#6 최종 모델 `server/data/recommend_model.npz`, `server/scoring.py`)
+  - 취향 일치: 고른 취향이 야경이면 서울시 야경명소, 관광 명소·자연·공원이면 같은 카테고리
+  - 가산점 2는 sigmoid 안에: 순서가 #6 평가(모델 점수 + 2 × 취향 일치)와 같아짐. sigmoid는 점수를 0~1 양수로 만들어 `/optimize`가 음수 점수를 '넣을수록 손해'로 다루지 않게 함
+  - 모델 파일이 없거나 읽지 못하면 경고 로그를 남기고 규칙 기준선(고른 취향 중 KURE 유사도 최댓값 + 0.3 × 취향 일치 − 0.3 × `detourRatio`, `poc/evaluate.py` `rule_baseline`)으로 대신
+  - 서버는 torch 없이 numpy로 계산. 모델을 바꾸면 `.pt`·`.json`을 `server/data/recommend_model.*`에 복사하고 `.venv`에서 `python server/export_model.py` (torch와 numpy 점수가 같은지 확인)
 - 오류: `{ "code", "message" }`
 
   | code | HTTP | 상황 |
@@ -63,11 +67,13 @@ uvicorn server.app:app --port 8000
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
 - 점검 (`pip install -r server/requirements-dev.txt`)
-  - `python -m server.test_recommend`: 쿼리 2,000건 점수가 규칙 기준선과 같은지, 오류 형식, 후보 수별 응답 시간
+  - `python -m server.test_recommend`: 쿼리 2,000건 점수가 학습 때 점수와 같은지, 모델 파일이 없을 때 규칙 기준선으로 대신하는지, 오류 형식, 후보 수별 응답 시간
   - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
   - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
 - 측정 (2026-11-06)
-  - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
+  - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값, 규칙 기준선 시절): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
+  - `/recommend` MLP (2026-11-13, Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 7.9ms · 200곳 6.6ms · 1,480곳 20.4ms (최대 57.6ms).
+    서버 안 처리 시간(TestClient)은 40곳 2.8ms · 200곳 3.7ms · 1,480곳 7.6ms
   - `/optimize` (`bench_optimize`, 후보 상위 40곳, 제한 500ms): 48건 중 47건 해를 찾음 (못 찾은 1건은 완전 탐색으로도 답이 없음),
     찾은 코스 모두 목표 ±10%·OSRM 실제 경로 거리와 같음, 3·5km 32건 전부 최적, 다시 만들기 128/141, 응답 중앙값 421ms · 최대 603ms
   - 이미지 539MB (OR-Tools 포함), 실행 메모리 약 82MB
