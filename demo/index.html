@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RUN+Trip AI 데모</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; display: flex; height: 100vh; font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif; color: #222; }
+  #panel { width: 360px; padding: 16px; overflow-y: auto; border-right: 1px solid #ddd; }
+  #map { flex: 1; }
+  #map.night .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.8); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .hint { color: #666; font-size: 13px; margin: 0 0 12px; }
+  fieldset { border: 1px solid #ddd; border-radius: 6px; margin: 0 0 10px; padding: 8px 10px; }
+  legend { font-weight: 600; padding: 0 4px; }
+  label { margin-right: 10px; white-space: nowrap; }
+  button { padding: 8px 12px; margin: 4px 4px 4px 0; border: 1px solid #888; border-radius: 6px; background: #fff; cursor: pointer; font: inherit; }
+  button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { margin: 8px 0; color: #c00; }
+  #result h2 { font-size: 15px; margin: 14px 0 6px; }
+  ol { padding-left: 20px; margin: 0; }
+  li { margin-bottom: 8px; }
+  .sub { color: #666; font-size: 12px; }
+  .reason { margin-top: 2px; }
+  .fallback { color: #888; font-style: italic; }
+  .score { font-size: 22px; font-weight: 700; }
+  .warn { color: #b45309; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  td { padding: 2px 4px; border-bottom: 1px solid #eee; }
+  td:last-child { text-align: right; }
+  .legend span { display: inline-block; width: 14px; height: 4px; vertical-align: middle; margin: 0 4px 0 8px; }
+  .arrow { width: 18px; height: 18px; line-height: 18px; text-align: center; font-size: 16px; color: #111; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff; }
+  .num { background: #1a73e8; color: #fff; border-radius: 50%; width: 24px; height: 24px; line-height: 24px; text-align: center; font-weight: 700; border: 2px solid #fff; box-shadow: 0 0 3px #000; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>RUN+Trip AI 데모</h1>
+  <p class="hint">지도를 클릭해 출발지를 찍으세요. 편도면 두 번째 클릭이 도착지예요. (종로·중구 권장)</p>
+  <fieldset><legend>코스</legend>
+    <label><input type="radio" name="mode" value="loop" checked> 순환</label>
+    <label><input type="radio" name="mode" value="oneway"> 편도</label>
+  </fieldset>
+  <fieldset><legend>거리</legend>
+    <label><input type="radio" name="km" value="3"> 3km</label>
+    <label><input type="radio" name="km" value="5" checked> 5km</label>
+    <label><input type="radio" name="km" value="7"> 7km</label>
+    <label><input type="radio" name="km" value="10"> 10km</label>
+  </fieldset>
+  <fieldset><legend>취향 (하나 이상)</legend>
+    <label><input type="checkbox" name="pref" value="NIGHT_VIEW" checked> 야경</label>
+    <label><input type="checkbox" name="pref" value="ATTRACTION"> 명소</label>
+    <label><input type="checkbox" name="pref" value="NATURE"> 자연</label>
+  </fieldset>
+  <fieldset><legend>시간대</legend>
+    <label><input type="radio" name="night" value="0" checked> 낮</label>
+    <label><input type="radio" name="night" value="1"> 밤</label>
+  </fieldset>
+  <button id="make" class="primary" disabled>코스 만들기</button>
+  <button id="again" disabled>다시 만들기</button>
+  <button id="reset">지점 지우기</button>
+  <div id="msg"></div>
+  <div id="result"></div>
+</div>
+<div id="map"></div>
+<script>
+const COLORS = { "많음": "#16a34a", "큰길(조명 추정)": "#2563eb", "보통": "#eab308", "적음": "#dc2626", "자료없음": "#9ca3af" };
+const map = L.map("map").setView([37.570, 126.985], 14);
+// CARTO 타일은 API 키가 필요해져 OSM 기본 타일 사용. 밤 지도는 CSS로 색 반전
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+const layer = L.layerGroup().addTo(map);
+const pins = L.layerGroup().addTo(map);
+const $ = (s) => document.querySelector(s);
+const val = (n) => document.querySelector(`input[name=${n}]:checked`).value;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let start = null, end = null, excluded = [], last = null;
+
+function drawPins() {
+  pins.clearLayers();
+  if (start) L.marker(start, { title: "출발" }).bindTooltip("출발", { permanent: true }).addTo(pins);
+  if (end) L.marker(end, { title: "도착" }).bindTooltip("도착", { permanent: true }).addTo(pins);
+  $("#make").disabled = !start || (val("mode") === "oneway" && !end);
+}
+map.on("click", (e) => {
+  const p = [e.latlng.lat, e.latlng.lng];
+  if (!start || val("mode") === "loop") { start = p; end = null; }
+  else end = p;
+  excluded = []; $("#again").disabled = true;
+  drawPins();
+});
+document.querySelectorAll("input").forEach((i) => i.addEventListener("change", () => {
+  if (i.name === "mode") end = null;
+  if (i.name === "night") $("#map").classList.toggle("night", val("night") === "1");
+  excluded = []; $("#again").disabled = true;
+  drawPins();
+}));
+$("#reset").onclick = () => { start = end = null; excluded = []; layer.clearLayers(); $("#result").innerHTML = ""; $("#msg").textContent = ""; $("#again").disabled = true; drawPins(); };
+$("#make").onclick = () => { excluded = []; make(); };
+$("#again").onclick = () => { if (last) excluded.push(last.order); make(); };
+
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+
+async function make() {
+  const prefs = [...document.querySelectorAll("input[name=pref]:checked")].map((i) => i.value);
+  if (!prefs.length) { $("#msg").textContent = "취향을 하나 이상 고르세요"; return; }
+  const body = { start, end: val("mode") === "oneway" ? end : null, km: +val("km"), preferences: prefs, isNight: val("night") === "1", excluded };
+  $("#msg").textContent = "코스 만드는 중…"; $("#make").disabled = $("#again").disabled = true;
+  const t0 = performance.now();
+  try {
+    const c = await api("/api/course", body);
+    const total = Math.round(performance.now() - t0);
+    last = c; $("#msg").textContent = "";
+    draw(c, total);
+    loadReasons(prefs, body.isNight, c.order);
+    $("#again").disabled = false;
+  } catch (e) {
+    $("#msg").textContent = e.message;
+    excluded.pop();                             // 실패한 다시 만들기에서 넣은 조합을 되돌림 (더 만들 코스가 없으면 버튼은 꺼진 채로)
+  } finally { drawPins(); }
+}
+
+function draw(c, total) {
+  layer.clearLayers();
+  for (const s of c.safety.segments)
+    L.polyline(c.path.slice(s.fromIndex, s.toIndex + 1), { color: COLORS[s.grade] || "#000", weight: 6, opacity: .9 }).bindTooltip(s.grade).addTo(layer);
+  arrows(c.path);
+  c.places.forEach((p, i) => L.marker([p.lat, p.lng], { icon: L.divIcon({ className: "", html: `<div class="num">${i + 1}</div>`, iconSize: [24, 24] }) })
+    .bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.category)} · 점수 ${p.score}${p.nightSpot ? " · 야경 명소" : ""}`).addTo(layer));
+  map.fitBounds(L.polyline(c.path).getBounds(), { padding: [30, 30] });
+
+  const s = c.safety;
+  const steps = c.steps.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.ms}ms</td></tr>`).join("");
+  $("#result").innerHTML = `
+    <h2>코스 ${c.routeKm}km · 장소 ${c.places.length}곳 <span class="sub">(후보 ${c.candidates}곳 중)</span></h2>
+    <div class="sub">출발 → ${c.places.map((_, i) => "①②③④⑤"[i]).join(" → ")} → ${val("mode") === "oneway" ? "도착" : "출발"}
+      ${c.overlap == null ? "" : `· 겹치는 길 ${Math.round(c.overlap * 100)}%`}</div>
+    <ol id="stops">${c.places.map((p, i) => `<li><b>${esc(p.name)}</b> <span class="sub">${esc(p.category)} · ${p.score}</span>
+      <div class="reason sub" id="r${i}">추천 이유 불러오는 중…</div></li>`).join("")}</ol>
+    <h2>조명 환경</h2>
+    <div><span class="score">${s.score ?? "-"}</span> ${esc(s.level ?? "")}
+      <span class="sub">자료 범위 ${Math.round(s.coverage * 100)}% · 큰길 추정 ${Math.round(s.estimated * 100)}%</span></div>
+    <div class="legend sub">${Object.entries(COLORS).map(([k, v]) => `<span style="background:${v}"></span>${k}`).join("")}</div>
+    ${s.warnings.map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
+    <h2>단계별 시간 <span class="sub">(목표 2초 안)</span></h2>
+    <table>${steps}<tr><td><b>합계 (브라우저 기준)</b></td><td><b>${total}ms</b></td></tr></table>
+    <div class="sub" id="rtime"></div>`;
+}
+
+// 진행 방향 화살표: 경로를 따라 ARROW_M마다 그 지점의 진행 방향으로 돌린 ▲
+const ARROW_M = 250;
+function arrows(path) {
+  let acc = ARROW_M / 2;
+  for (let i = 1; i < path.length; i++) {
+    const d = map.distance(path[i - 1], path[i]);
+    for (acc -= d; acc <= 0; acc += ARROW_M) {
+      const t = 1 + acc / d, a = path[i - 1], b = path[i];
+      const at = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const pa = map.project(a, 15), pb = map.project(b, 15);   // 메르카토르라 각도는 줌과 무관
+      const deg = Math.atan2(pb.x - pa.x, pa.y - pb.y) * 180 / Math.PI;
+      L.marker(at, { interactive: false, icon: L.divIcon({ className: "", iconSize: [18, 18],
+        html: `<div class="arrow" style="transform:rotate(${deg}deg)">▲</div>` }) }).addTo(layer);
+    }
+  }
+}
+
+async function loadReasons(preferences, isNight, order) {
+  try {
+    const r = await api("/api/reasons", { preferences, isNight, order });
+    if (last?.order !== order) return;          // 그 사이 새 코스를 만들었으면 버림
+    r.reasons.forEach((x, i) => {
+      const el = $(`#r${i}`); if (!el) return;
+      el.className = "reason" + (x.reason ? "" : " fallback");
+      el.textContent = x.reason || x.fallback || "추천 이유 없음";
+    });
+    $("#rtime").textContent = `추천 이유 ${r.ms}ms (코스를 먼저 보여 준 뒤 따로 불러옴)`;
+  } catch (e) {
+    order.forEach((_, i) => { const el = $(`#r${i}`); if (el) { el.className = "reason fallback"; el.textContent = "추천 이유를 불러오지 못했어요"; } });
+  }
+}
+drawPins();
+</script>
+</body>
+</html>

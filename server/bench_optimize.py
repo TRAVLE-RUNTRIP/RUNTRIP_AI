@@ -1,7 +1,8 @@
 """/optimize를 실제 OSRM 거리표로 검증 (#4). OSRM(127.0.0.1:5000)을 띄운 뒤 레포 루트에서  python -m server.bench_optimize
 
 BE가 할 일을 흉내 냄: 후보 범위(직선거리 합 ≤ 목표 ÷ 1.3) → /recommend → 상위 40곳 → OSRM table → /optimize → OSRM route
-확인: 해를 찾는 비율, 응답 시간, 총 거리 ±10%, maxPlaces, excludedCombos(다시 만들기 3번), 실제 경로 거리
+확인: 해를 찾는 비율, 응답 시간, 총 거리 ±10%, maxPlaces, excludedCombos(다시 만들기 3번), 실제 경로 거리,
+      같은 길 왕복 줄이기(nodeCoords 있음 vs 없음: 첫 코스의 겹침 비율과 점수 합 손실)
 --exact: 3·5km는 모든 조합·순서를 계산(완전 탐색)해 점수 합이 최적인지도 확인
 """
 import itertools, sys
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from server import optimize
 from server.app import app
 
 OSRM = "http://127.0.0.1:5000"
@@ -60,7 +62,8 @@ def run_case(c, s, e, km, prefs, night):
     m = osrm("table", [s, *pts, e], "?annotations=distance")["distances"]
     m = [[round(v) for v in row] for row in m]
     body = {"targetKm": km, "maxPlaces": max_places(km), "timeLimitMs": 500, "placeIds": ids, "scores": scores,
-            "distanceMatrixM": m, "excludedCombos": []}
+            "distanceMatrixM": m, "excludedCombos": [], "nodeCoords": [s, *pts, e]}
+    old = c.post("/optimize", json={**body, "nodeCoords": None}).json()          # 비교용: 겹침을 보지 않던 예전 방식
     rounds = []
     for _ in range(4):                  # 처음 + 다시 만들기 3번
         t = time.perf_counter()
@@ -70,7 +73,7 @@ def run_case(c, s, e, km, prefs, night):
         if not res["found"]:
             break
         body["excludedCombos"] = body["excludedCombos"] + [res["orderedPlaceIds"]]
-    return ids, scores, m, body, rounds, len(cand)
+    return ids, scores, m, body, rounds, len(cand), old
 
 
 def check(km, ids, m, body, rounds, s, e):
@@ -109,7 +112,7 @@ def exact_best(km, mp, scores, m):
 if __name__ == "__main__":
     exact = "--exact" in sys.argv
     opt_same = opt_total = 0
-    rows, n = [], 0
+    rows, n, loop = [], 0, []
     with TestClient(app) as c:
         for name, s in STARTS.items():
             for km in TARGETS:
@@ -121,11 +124,17 @@ if __name__ == "__main__":
                     if out is None:
                         rows.append((name, kind, km, 0, None, [], None))
                         continue
-                    ids, scores, m, body, rounds, ncand = out
+                    ids, scores, m, body, rounds, ncand, old = out
                     route_km = check(km, ids, m, body, rounds, s, e)
-                    if exact and km <= 5:
+                    new = rounds[0][0]
+                    if old["found"] and new["found"] and new["overlapRatio"] is not None:
+                        pt = lambda p: (float(places[p]["lat"]), float(places[p]["lng"]))
+                        gain = lambda o: sum(scores[ids.index(p)] for p in o)
+                        loop.append((optimize.osrm_overlap([s, *map(pt, old["orderedPlaceIds"]), e]), new["overlapRatio"],
+                                     1 - gain(new["orderedPlaceIds"]) / gain(old["orderedPlaceIds"]), rounds[0][1]))
+                    if exact and km <= 5:              # 솔버 최적성은 겹침을 보지 않는 예전 방식(old)으로 확인
                         best = exact_best(km, body["maxPlaces"], scores, m)
-                        got = sum(max(0, scores[ids.index(p)]) for p in rounds[0][0]["orderedPlaceIds"]) if rounds[0][0]["found"] else -1
+                        got = sum(max(0, scores[ids.index(p)]) for p in old["orderedPlaceIds"]) if old["found"] else -1
                         opt_total += 1
                         opt_same += abs(best - got) < 1e-9
                         if abs(best - got) >= 1e-9:
@@ -150,5 +159,11 @@ if __name__ == "__main__":
     times.sort()
     print(f"\n첫 코스 해를 찾은 비율: {first_found}/{len(rows)}  |  다시 만들기: {re_found}/{re_total}"
           f"  |  응답 중앙값 {times[len(times) // 2]:.0f}ms, 최대 {times[-1]:.0f}ms (솔버 제한 500ms)")
+    if loop:
+        med = lambda v: sorted(v)[len(v) // 2]
+        before, after, loss, ms = zip(*loop)
+        print(f"같은 길 왕복 ({len(loop)}건, 첫 코스): 겹침 중앙값 {med(before):.0%} → {med(after):.0%}, "
+              f"겹침 30% 초과 {sum(v > 0.3 for v in before)}건 → {sum(v > 0.3 for v in after)}건, "
+              f"점수 합 손실 중앙값 {med(loss):.1%}·최대 {max(loss):.1%}, 응답 중앙값 {med(ms):.0f}ms")
     if exact:
         print(f"3·5km 완전 탐색 최적과 같음: {opt_same}/{opt_total} (답이 없는 경우는 양쪽 다 -1로 같음)")

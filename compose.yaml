@@ -17,4 +17,5 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}   # /reasons. 레포 루트 .env에 GEMINI_API_KEY=... (git에 올리지 않음). 없으면 /reasons만 502
       AI_API_KEY: ${AI_API_KEY:-}           # 있으면 /health 말고 모든 API가 X-API-Key 헤더를 요구 (.env에 둠). 없으면 검사 안 함
+      OSRM_URL: http://osrm:5000            # /optimize가 후보 코스의 같은 길 왕복을 잴 때 씀
     restart: unless-stopped
