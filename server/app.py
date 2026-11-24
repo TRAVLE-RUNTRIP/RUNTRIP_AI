@@ -144,11 +144,19 @@ class OptimizeRequest(BaseModel):
         return self
 
 
+class Stop(BaseModel):
+    type: Literal["PLACE", "WAYPOINT"]
+    placeId: str | None = None           # PLACE
+    lat: float | None = None             # WAYPOINT: 길 위 좌표 (점수 0, 장소 목록에는 안 보임)
+    lng: float | None = None
+
+
 class OptimizeResponse(BaseModel):
     found: bool
-    orderedPlaceIds: list[str]
-    totalKm: float | None
-    overlapRatio: float | None = None   # 같은 길을 두 번 이상 지나는 거리 비율 (nodeCoords가 없거나 OSRM 실패면 null)
+    orderedPlaceIds: list[str]           # 장소만 (경유지 제외)
+    totalKm: float | None                # 경유지 포함 거리
+    overlapRatio: float | None = None    # 같은 길을 두 번 이상 지나는 거리 비율 (nodeCoords가 없거나 OSRM 실패면 null)
+    stops: list[Stop] = []               # 방문 순서 (장소·우회 경유지). BE는 이 순서로 OSRM route를 부름
 
 
 class ReasonPlace(BaseModel):
@@ -228,10 +236,10 @@ def recommend(req: RecommendRequest):
 @app.post("/optimize", response_model=OptimizeResponse)
 def optimize(req: OptimizeRequest):
     """B2. 목표 거리 ±10% 안에서 점수 합이 최대인 장소 조합·순서 (OR-Tools). 못 찾으면 found = false"""
-    found, order, total_m, ov = solve(req.targetKm, req.maxPlaces, req.timeLimitMs, req.placeIds, req.scores,
-                                      req.distanceMatrixM, req.excludedCombos, req.nodeCoords)
+    found, order, total_m, ov, stops = solve(req.targetKm, req.maxPlaces, req.timeLimitMs, req.placeIds, req.scores,
+                                             req.distanceMatrixM, req.excludedCombos, req.nodeCoords)
     return {"found": found, "orderedPlaceIds": order, "totalKm": round(total_m / 1000, 2) if found else None,
-            "overlapRatio": None if ov is None else round(ov, 2)}
+            "overlapRatio": None if ov is None else round(ov, 2), "stops": stops}
 
 
 @app.post("/reasons", response_model=ReasonsResponse)

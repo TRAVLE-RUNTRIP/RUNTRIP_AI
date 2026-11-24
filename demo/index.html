@@ -133,6 +133,8 @@ function draw(c, total) {
   for (const s of c.safety.segments)
     L.polyline(c.path.slice(s.fromIndex, s.toIndex + 1), { color: COLORS[s.grade] || "#000", weight: 6, opacity: .9 }).bindTooltip(s.grade).addTo(layer);
   arrows(c.path);
+  c.waypoints.forEach((w) => L.circleMarker(w, { radius: 6, color: "#fff", weight: 2, fillColor: "#6b7280", fillOpacity: 1 })
+    .bindTooltip("우회 경유지").addTo(layer));
   c.places.forEach((p, i) => L.marker([p.lat, p.lng], { icon: L.divIcon({ className: "", html: `<div class="num">${i + 1}</div>`, iconSize: [24, 24] }) })
     .bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.category)} · 점수 ${p.score}${p.nightSpot ? " · 야경 명소" : ""}`).addTo(layer));
   map.fitBounds(L.polyline(c.path).getBounds(), { padding: [30, 30] });
@@ -142,7 +144,7 @@ function draw(c, total) {
   $("#result").innerHTML = `
     <h2>코스 ${c.routeKm}km · 장소 ${c.places.length}곳 <span class="sub">(후보 ${c.candidates}곳 중)</span></h2>
     <div class="sub">출발 → ${c.places.map((_, i) => "①②③④⑤"[i]).join(" → ")} → ${val("mode") === "oneway" ? "도착" : "출발"}
-      ${c.overlap == null ? "" : `· 겹치는 길 ${Math.round(c.overlap * 100)}%`}</div>
+      ${c.overlap == null ? "" : `· 겹치는 길 ${Math.round(c.overlap * 100)}%`}${c.waypoints.length ? ` · 우회 경유지 ${c.waypoints.length}곳` : ""}</div>
     <ol id="stops">${c.places.map((p, i) => `<li><b>${esc(p.name)}</b> <span class="sub">${esc(p.category)} · ${p.score}</span>
       <div class="reason sub" id="r${i}">추천 이유 불러오는 중…</div></li>`).join("")}</ol>
     <h2>조명 환경</h2>

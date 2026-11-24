@@ -98,8 +98,9 @@ def course(req):
     if not res["found"]:
         raise ValueError("조건에 맞는 코스를 찾지 못했어요" + (" (더 만들 수 있는 코스가 없어요)" if req.get("excluded") else ""))
     order = res["orderedPlaceIds"]
-    stops = [(float(places[p]["lat"]), float(places[p]["lng"])) for p in order]
-    r = osrm("route", [s, *stops, e], "?overview=full&geometries=geojson")["routes"][0]
+    pos = lambda x: (float(places[x["placeId"]]["lat"]), float(places[x["placeId"]]["lng"])) if x["type"] == "PLACE" else (x["lat"], x["lng"])
+    seq = res.get("stops") or [{"type": "PLACE", "placeId": p} for p in order]     # 우회 경유지(#33)까지 방문 순서대로
+    r = osrm("route", [s, *map(pos, seq), e], "?overview=full&geometries=geojson")["routes"][0]
     path = [[lat, lng] for lng, lat in r["geometry"]["coordinates"]]
     lap("OSRM 경로선")
     safety = post("/safety", {"path": path, "isNight": night})
@@ -107,9 +108,11 @@ def course(req):
     score_of = dict(zip(ids, scores))
     return {"path": path, "routeKm": round(r["distance"] / 1000, 2), "candidates": len(cand), "order": order, "steps": steps,
             "overlap": res.get("overlapRatio"),
+            "waypoints": [[x["lat"], x["lng"]] for x in seq if x["type"] == "WAYPOINT"],
             "safety": safety,
             "places": [{"placeId": p, "name": places[p]["title"], "category": places[p]["category"], "lat": la, "lng": lo,
-                        "nightSpot": places[p]["night_spot"] == "1", "score": round(score_of[p], 3)} for p, (la, lo) in zip(order, stops)]}
+                        "nightSpot": places[p]["night_spot"] == "1", "score": round(score_of[p], 3)}
+                       for p, (la, lo) in ((p, pos({"type": "PLACE", "placeId": p})) for p in order)]}
 
 
 def reasons(req):

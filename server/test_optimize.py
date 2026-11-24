@@ -59,7 +59,7 @@ def main(c):
 
     # 답이 없음: 가장 먼 장소를 왕복해도 목표의 90%에 못 미침
     r = c.post("/optimize", json=body(["D"], [0.9], km=10)).json()
-    assert r == {"found": False, "orderedPlaceIds": [], "totalKm": None, "overlapRatio": None}, r
+    assert r == {"found": False, "orderedPlaceIds": [], "totalKm": None, "overlapRatio": None, "stops": []}, r
     print("답 없음·음수 점수·장소 수 상한 확인")
 
     # 같은 길 왕복 줄이기 (실제 OSRM 대신 가짜 겹침). F(−1000m)를 더하면 점수 최고는 A+C+D·A+D+F(2.47),
@@ -69,7 +69,8 @@ def main(c):
     names = {pt: p for p, pt in zip(ids6, coords[1:-1])}
     fake = {frozenset("ACD"): 0.9, frozenset("ADF"): 0.9, frozenset("BEF"): 0.1, frozenset("AC"): 0.0}
     req = {**body(ids6, scores6), "nodeCoords": coords}
-    real = optimize.osrm_overlap
+    real, real_wp, real_ext = optimize.osrm_overlap, optimize.make_waypoints, optimize.extend
+    optimize.make_waypoints = lambda coords, km: []       # 이 부분은 경유지 없이 (#31)
     optimize.osrm_overlap = lambda pts: fake.get(frozenset(names[q] for q in pts[1:-1]), 0.5)
     try:
         r = c.post("/optimize", json=req).json()       # 겹침 0인 A+C는 점수가 너무 낮아 제외 → B+E+F
@@ -81,8 +82,40 @@ def main(c):
         optimize.osrm_overlap = down                   # OSRM이 안 되면 예전처럼 점수 최고 + overlapRatio null
         r = c.post("/optimize", json=req).json()
         assert set(r["orderedPlaceIds"]) in ({"A", "C", "D"}, {"A", "D", "F"}) and r["overlapRatio"] is None, r
+        assert [x["placeId"] for x in r["stops"]] == r["orderedPlaceIds"], r
+
+        # 우회 경유지 (#33): 경유지 좌표는 위도로 일직선 위치를 나타냄 (가짜 OSRM nearest·table)
+        line = lambda lat: round((lat - 37.5) * 111_000)
+        optimize.extend = lambda dist, cs, wps: [[abs(line(a[0]) - line(b[0])) for b in [*cs, *wps]] for a in [*cs, *wps]]
+        W = lambda m: (37.5 + m / 111_000, 127.0)
+        # 1) A(1500m)만으로는 5km가 안 됨(3km) → 반대편 경유지(−1200m)로 채워 S→A→W→S 5.4km
+        optimize.make_waypoints = lambda coords, km: [W(-1200)]
+        optimize.osrm_overlap = lambda pts: 0.2
+        one = [(37.5, 127.0), (37.5 + 1500 / 111_000, 127.0), (37.5, 127.0)]
+        r = c.post("/optimize", json={**body(["A"], [0.9]), "nodeCoords": one}).json()
+        assert r["found"] and r["orderedPlaceIds"] == ["A"] and r["totalKm"] == 5.4, r
+        assert [x["type"] for x in r["stops"]] in (["PLACE", "WAYPOINT"], ["WAYPOINT", "PLACE"]), r
+        # 2) 점수가 같으면 겹침이 적은 쪽: A+C+D(4.6km, 겹침 0.9)에 경유지(−200m)를 넣은 5.0km 코스가 겹침 0.05
+        optimize.make_waypoints = lambda coords, km: [W(-200)]
+        wp = W(-200)
+        optimize.osrm_overlap = lambda pts: 0.05 if wp in pts else fake.get(frozenset(names[q] for q in pts[1:-1]), 0.5)
+        r = c.post("/optimize", json=req).json()
+        assert r["found"] and set(r["orderedPlaceIds"]) == set("ACD") and r["overlapRatio"] == 0.05 and r["totalKm"] == 5.0, r
+        assert sum(x["type"] == "WAYPOINT" for x in r["stops"]) == 1, r
+        # 3) 경유지 코스가 더 나쁘면 쓰지 않음 (지금 방식보다 나빠지지 않음)
+        optimize.osrm_overlap = lambda pts: 0.99 if wp in pts else fake.get(frozenset(names[q] for q in pts[1:-1]), 0.5)
+        r = c.post("/optimize", json=req).json()
+        assert set(r["orderedPlaceIds"]) == set("BEF") and r["overlapRatio"] == 0.1 and all(x["type"] == "PLACE" for x in r["stops"]), r
+        # 4) 경유지 만들기가 실패하면 장소만으로
+        def wp_down(coords, km):
+            raise OSError("OSRM 꺼짐")
+        optimize.make_waypoints = wp_down
+        optimize.osrm_overlap = lambda pts: fake.get(frozenset(names[q] for q in pts[1:-1]), 0.5)
+        r = c.post("/optimize", json=req).json()
+        assert set(r["orderedPlaceIds"]) == set("BEF") and r["overlapRatio"] == 0.1, r
+        print("우회 경유지: 거리 채우기·겹침 적은 쪽·나빠지지 않음·실패 대체 확인")
     finally:
-        optimize.osrm_overlap = real
+        optimize.osrm_overlap, optimize.make_waypoints, optimize.extend = real, real_wp, real_ext
     # 겹침 계산: 1→2→3→2→1 (같은 길 왕복 전부) / 1→2→3 + 3→4 (겹침 없음)
     leg = lambda ns, ds: {"annotation": {"nodes": ns, "distance": ds}}
     assert optimize.overlap_of([leg([1, 2, 3], [10, 30]), leg([3, 2, 1], [30, 10])]) == 1.0
