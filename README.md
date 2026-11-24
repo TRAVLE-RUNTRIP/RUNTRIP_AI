@@ -56,16 +56,24 @@ uvicorn server.app:app --port 8000
   ```json
   // 요청: 거리표 첫 줄 = 출발지, 마지막 줄 = 도착지(순환이면 출발지와 같은 좌표), 가운데 = placeIds 순서 (정수 m)
   {"targetKm": 5, "maxPlaces": 3, "timeLimitMs": 500, "placeIds": ["T1116925", "T128961"], "scores": [0.92, 0.88],
-   "distanceMatrixM": [[0, 320, 410, 0], [320, 0, 150, 320], [410, 150, 0, 410], [0, 320, 410, 0]], "excludedCombos": []}
-  // 응답. 못 찾으면 {"found": false, "orderedPlaceIds": [], "totalKm": null} → BE가 NO_PLACES / NO_MORE_COURSES
-  {"found": true, "orderedPlaceIds": ["T128961", "T1116925"], "totalKm": 5.1}
+   "distanceMatrixM": [[0, 320, 410, 0], [320, 0, 150, 320], [410, 150, 0, 410], [0, 320, 410, 0]], "excludedCombos": [],
+   "nodeCoords": [[37.5665, 126.978], [37.5796, 126.977], [37.5658, 126.9751], [37.5665, 126.978]]}
+  // 응답. 못 찾으면 {"found": false, "orderedPlaceIds": [], "totalKm": null, "overlapRatio": null} → BE가 NO_PLACES / NO_MORE_COURSES
+  {"found": true, "orderedPlaceIds": ["T128961", "T1116925"], "totalKm": 5.1, "overlapRatio": 0.12}
   ```
+
+  - `nodeCoords`(선택): 거리표와 같은 순서의 [위도, 경도] (BE가 OSRM table에 보낸 좌표 그대로). 있으면 같은 길 왕복이 적은 코스를 고름.
+    점수가 장소마다 0.99 근처로 포화돼 점수 합 최대만 보면, 목표 거리를 채우려고 같은 길을 왕복하는 순서가 자주 뽑힘 (시청 5km: 1등이 세종대로 왕복 겹침 100%).
+    그래서 점수 합이 최고의 95% 이상인 후보(솔버 해 + 점수 상위 12곳의 모든 조합·순서 중 거리 ±10% 안, 최대 60개)의 OSRM 경로를 AI 서버가 직접 받아,
+    같은 길(OSM 노드 쌍)을 두 번 이상 지나는 거리 비율 `overlapRatio`가 가장 작은 쪽을 고름. OSRM 주소는 환경 변수 `OSRM_URL` (Compose는 `http://osrm:5000`).
+    겹침 계산은 전체 1초 상한(넘으면 그때까지 잰 후보만 비교). 하나도 못 재면 예전처럼 점수 합 최대 코스, `overlapRatio`는 null
 
   - 장소마다 빼면 점수 × 1000만큼 손해(`AddDisjunction`), 거리 상한 목표 × 1.1, 하한 × 0.9, 장소 수 ≤ `maxPlaces`. 점수가 음수인 장소도 점수 합에 그대로 반영(넣을수록 손해)해서, 점수 합을 더 높이거나 거리를 맞출 때만 들어감
   - `excludedCombos`: 이미 보여준 조합의 장소가 모두 다시 들어가지 않게 함 (개선안 10장 "활성 변수 합 ≤ 장소 수 − 1")
   - 솔버: 제한 시간의 30%는 OR-Tools Routing으로 첫 해, 나머지는 그 해를 힌트로 CP-SAT이 개선 → 점수 합이 큰 쪽.
     Routing만 쓰면 3·5km 32건 중 28건만 최적이고 1건은 해를 놓쳐서 바꿈 (2026-11-06)
-  - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복·50곳 초과, 음수 거리, 범위 밖 값
+  - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복·50곳 초과, 음수 거리, 범위 밖 값,
+    `nodeCoords` 개수가 장소 수 + 2가 아님·위도 경도 범위 밖
     (50곳 상한: BE는 상위 40곳을 보내고, 더 많으면 CP-SAT 모델이 커져 제한 시간 안에 좋은 해를 찾기 어려움. 후보 수를 바꾸면 같이 조정)
 - `POST /reasons`: 코스 장소별 추천 이유 한 문장 (Gemini, `server/reasons.py`). Spring이 코스 응답 뒤 백그라운드로 호출 (제한 5초)
 
@@ -104,9 +112,10 @@ uvicorn server.app:app --port 8000
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
 - 점검 (`pip install -r server/requirements-dev.txt`)
   - `python -m server.test_recommend`: 쿼리 2,000건 점수가 학습 때 점수와 같은지, 모델 파일이 없을 때 규칙 기준선으로 대신하는지, 오류 형식, 후보 수별 응답 시간
-  - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
+  - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류, 가짜 겹침으로 왕복 줄이기·OSRM 실패 대체)
   - `python -m server.test_auth`: API 키 검사 (키 없음·틀림 401, `/health`·`/docs`는 열림, 키 설정이 없으면 검사 안 함)
-  - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
+  - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도.
+    `nodeCoords`가 없던 예전 방식과 첫 코스의 겹침 비율·점수 합 손실도 비교
   - `python -m server.test_reasons`: 가짜 Gemini 응답으로 근거 검증·장소 순서·실패 응답. `--live`면 실제 Gemini 호출 (키 필요)
   - `python -m server.test_safety`: 구간 → path 인덱스 변환, 빈틈·겹침, 자료 밖(부산) 경로, 오류 형식, 5·10km 응답 시간
 - 측정 (2026-11-06)
@@ -232,3 +241,17 @@ idx.grade_course([(126.9918, 37.5704), (126.9850, 37.5820)], night=True)   # OSR
   → `python geocode_lamps.py` (KAKAO_REST_KEY, 빈 좌표를 주소로 채움 → `lamps_geo/`) → `python merge_lamps.py lamps_geo`
 - `segment_stats.py`: 기준값(8개/100m)을 정한 통계 스크립트 + 집계 공통 함수(safety.py가 같은 방식으로 셈). 기준값은 종로·중구로 정했고 나머지 구는 3.8 때 재확인 예정.
 - `check_osm.py`, `check_lamps.py`: 데이터 점검용.
+
+## 4. 시연용 지도 데모 (demo/)
+
+BE·FE 연동 전에 AI 파트만 지도에서 보여 주는 페이지. `demo/server.py`가 BE 대신 코스 생성 순서(API 명세 B-4)를 흉내 내고, `demo/index.html`(Leaflet, OSM 타일)이 결과를 그림.
+
+- 실행 (파이썬 기본 라이브러리만 씀)
+  1. OSRM을 내 PC로 연결 (창을 열어 둠): `ssh -i ~/.ssh/runtrip.pem -N -L 5000:127.0.0.1:5000 ubuntu@15.134.44.138`
+  2. 레포 루트에서 `AI_URL=http://15.134.44.138:8000 AI_API_KEY=<키> python demo/server.py` → `http://127.0.0.1:8080`
+     (같은 와이파이의 휴대폰은 실행 때 찍히는 `http://<PC IP>:8080`. 내 PC에서만 열려면 `HOST=127.0.0.1`)
+  - 로컬 `docker compose`로 AI 서버·OSRM을 띄웠으면 터널 없이 `python demo/server.py`
+- 화면: 지도 클릭으로 출발(편도면 두 번째 클릭이 도착) → 순환·편도, 3/5/7/10km, 취향, 낮·밤 → 코스 만들기·다시 만들기
+  - 경로는 조명 등급별 색 구간, 250m마다 진행 방향 화살표, 장소 번호 마커, 순서와 겹치는 길 비율(`overlapRatio`)
+  - 조명 점수·경고, 단계별 시간(목표 2초), 추천 이유는 코스를 먼저 보여 준 뒤 따로 불러옴 (실패하면 개요)
+- 시연 출발지는 보안등 자료가 있는 종로·중구 권장

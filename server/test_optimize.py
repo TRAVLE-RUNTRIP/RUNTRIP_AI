@@ -2,11 +2,12 @@
 실제 OSRM 거리표 검증은 server/bench_optimize.py"""
 from fastapi.testclient import TestClient
 
+from server import optimize
 from server.app import app
 
 # 일직선 위의 점 (m): 출발지 0, 장소 A~E, 도착지 0 (순환). 거리 = 위치 차이
 # 개선안 7장 표와 같게: A+B 왕복 7.8km(초과), A+C+D 4.6km(점수 합 2.47), B+E 4.8km(1.58)
-POS = {"S": 0, "A": 1500, "B": -2400, "C": 2300, "D": 1000, "E": -2200, "T": 0}
+POS = {"S": 0, "A": 1500, "B": -2400, "C": 2300, "D": 1000, "E": -2200, "F": -1000, "T": 0}
 
 
 def matrix(names):
@@ -58,8 +59,36 @@ def main(c):
 
     # 답이 없음: 가장 먼 장소를 왕복해도 목표의 90%에 못 미침
     r = c.post("/optimize", json=body(["D"], [0.9], km=10)).json()
-    assert r == {"found": False, "orderedPlaceIds": [], "totalKm": None}, r
+    assert r == {"found": False, "orderedPlaceIds": [], "totalKm": None, "overlapRatio": None}, r
     print("답 없음·음수 점수·장소 수 상한 확인")
+
+    # 같은 길 왕복 줄이기 (실제 OSRM 대신 가짜 겹침). F(−1000m)를 더하면 점수 최고는 A+C+D·A+D+F(2.47),
+    # B+E+F(2.38, 4.8km)는 95%(2.35) 이상, A+C(1.72)는 95% 아래
+    ids6, scores6 = [*ids, "F"], [*scores, 0.80]
+    coords = [(37.5, 127.0)] + [(37.5 + POS[p] / 111_000, 127.0) for p in ids6] + [(37.5, 127.0)]
+    names = {pt: p for p, pt in zip(ids6, coords[1:-1])}
+    fake = {frozenset("ACD"): 0.9, frozenset("ADF"): 0.9, frozenset("BEF"): 0.1, frozenset("AC"): 0.0}
+    req = {**body(ids6, scores6), "nodeCoords": coords}
+    real = optimize.osrm_overlap
+    optimize.osrm_overlap = lambda pts: fake.get(frozenset(names[q] for q in pts[1:-1]), 0.5)
+    try:
+        r = c.post("/optimize", json=req).json()       # 겹침 0인 A+C는 점수가 너무 낮아 제외 → B+E+F
+        assert r["found"] and set(r["orderedPlaceIds"]) == set("BEF") and r["overlapRatio"] == 0.1 and r["totalKm"] == 4.8, r
+        print("왕복 심한 1등 대신:", r["orderedPlaceIds"], r["totalKm"], "km")
+
+        def down(pts):
+            raise OSError("OSRM 꺼짐")
+        optimize.osrm_overlap = down                   # OSRM이 안 되면 예전처럼 점수 최고 + overlapRatio null
+        r = c.post("/optimize", json=req).json()
+        assert set(r["orderedPlaceIds"]) in ({"A", "C", "D"}, {"A", "D", "F"}) and r["overlapRatio"] is None, r
+    finally:
+        optimize.osrm_overlap = real
+    # 겹침 계산: 1→2→3→2→1 (같은 길 왕복 전부) / 1→2→3 + 3→4 (겹침 없음)
+    leg = lambda ns, ds: {"annotation": {"nodes": ns, "distance": ds}}
+    assert optimize.overlap_of([leg([1, 2, 3], [10, 30]), leg([3, 2, 1], [30, 10])]) == 1.0
+    assert optimize.overlap_of([leg([1, 2, 3], [10, 30]), leg([3, 4], [60])]) == 0.0
+    assert optimize.overlap_of([leg([1, 2, 3], [10, 30]), leg([3, 2, 5], [30, 30])]) == 0.6
+    print("같은 길 왕복 줄이기·OSRM 실패 대체·겹침 계산 확인")
 
     bad = [
         ("거리표 크기", {**body(ids, scores), "distanceMatrixM": matrix(["S", "A", "T"])}),
@@ -67,6 +96,8 @@ def main(c):
         ("장소 중복", body(["A", "A"], [0.9, 0.8])),
         ("음수 거리", {**body(["A"], [0.9]), "distanceMatrixM": [[0, -1, 0], [1, 0, 1], [0, 1, 0]]}),
         ("목표 거리 0", body(ids, scores, km=0)),
+        ("좌표 개수", {**body(["A"], [0.9]), "nodeCoords": [[37.5, 127.0]] * 2}),
+        ("좌표 범위", {**body(["A"], [0.9]), "nodeCoords": [[37.5, 127.0], [137.5, 127.0], [37.5, 127.0]]}),
         ("maxPlaces 0", body(ids, scores, max_places=0)),
         ("장소 51곳", {**body(["A"], [0.9]), "placeIds": [f"P{i}" for i in range(51)], "scores": [0.5] * 51,
                      "distanceMatrixM": [[0] * 53 for _ in range(53)]}),

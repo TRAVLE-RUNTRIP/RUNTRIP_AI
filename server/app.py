@@ -125,10 +125,14 @@ class OptimizeRequest(BaseModel):
     scores: list[float]
     distanceMatrixM: list[list[int]]
     excludedCombos: list[list[str]] = []
+    nodeCoords: list[tuple[float, float]] | None = None   # 거리표와 같은 순서의 [lat, lng]. 있으면 같은 길 왕복이 적은 코스를 고름
 
     @model_validator(mode="after")
     def shapes(self):
         n = len(self.placeIds)
+        if self.nodeCoords is not None and (len(self.nodeCoords) != n + 2 or not all(
+                math.isfinite(a) and math.isfinite(b) and -90 <= a <= 90 and -180 <= b <= 180 for a, b in self.nodeCoords)):
+            raise ValueError(f"nodeCoords는 {n + 2}개의 [위도, 경도]여야 해요 (출발지 + 장소 {n}곳 + 도착지)")
         if len(set(self.placeIds)) != n:
             raise ValueError("placeIds에 같은 장소가 중복됐어요")
         if len(self.scores) != n or not all(math.isfinite(s) for s in self.scores):
@@ -144,6 +148,7 @@ class OptimizeResponse(BaseModel):
     found: bool
     orderedPlaceIds: list[str]
     totalKm: float | None
+    overlapRatio: float | None = None   # 같은 길을 두 번 이상 지나는 거리 비율 (nodeCoords가 없거나 OSRM 실패면 null)
 
 
 class ReasonPlace(BaseModel):
@@ -223,9 +228,10 @@ def recommend(req: RecommendRequest):
 @app.post("/optimize", response_model=OptimizeResponse)
 def optimize(req: OptimizeRequest):
     """B2. 목표 거리 ±10% 안에서 점수 합이 최대인 장소 조합·순서 (OR-Tools). 못 찾으면 found = false"""
-    found, order, total_m = solve(req.targetKm, req.maxPlaces, req.timeLimitMs, req.placeIds, req.scores,
-                                  req.distanceMatrixM, req.excludedCombos)
-    return {"found": found, "orderedPlaceIds": order, "totalKm": round(total_m / 1000, 2) if found else None}
+    found, order, total_m, ov = solve(req.targetKm, req.maxPlaces, req.timeLimitMs, req.placeIds, req.scores,
+                                      req.distanceMatrixM, req.excludedCombos, req.nodeCoords)
+    return {"found": found, "orderedPlaceIds": order, "totalKm": round(total_m / 1000, 2) if found else None,
+            "overlapRatio": None if ov is None else round(ov, 2)}
 
 
 @app.post("/reasons", response_model=ReasonsResponse)

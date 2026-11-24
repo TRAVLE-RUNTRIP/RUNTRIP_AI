@@ -9,12 +9,30 @@
 점수가 음수인 장소도 점수 합에 그대로 반영(넣을수록 손해) → 점수 합을 더 높이거나(더 좋은 장소로 가는 길목) 거리를 맞출 때만 들어감.
 완전히 빼지 않는 이유: 빼면 거리를 못 맞춰 코스가 안 나오는 경우가 늘어서
 excludedCombos: 조합의 활성 변수 합 ≤ 장소 수 − 1 (개선안 10장)
+
+같은 길 왕복 줄이기 (nodeCoords가 있을 때): 점수가 거의 포화(장소마다 0.99 근처)라 점수 합 최대만 보면
+목표 거리를 채우려고 같은 길을 왕복하는 순서가 자주 뽑힘 (시청 5km: 1등이 세종대로 왕복 겹침 100%, 겹침 29%인 코스와 점수 차 0.3%).
+그래서 점수 합이 최고의 (1 − SCORE_TOL) 이상인 후보들의 실제 OSRM 경로를 받아 같은 길을 두 번 지나는 비율이 가장 작은 쪽을 고름.
+후보 = 솔버 해 + 점수 상위 ALT_K곳의 모든 조합·순서 중 거리 ±10% 안. OSRM이 안 되면 솔버 해 그대로
 """
+import itertools
+import json
+import logging
+import os
 import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from ortools.sat.python import cp_model
 
+log = logging.getLogger("runtrip.ai")
+OSRM = os.environ.get("OSRM_URL", "http://127.0.0.1:5000")
+ALT_K = 12                # 겹침 비교 후보를 만들 점수 상위 장소 수 (4곳 코스면 순서 약 1.3만 개, 수십 ms)
+SCORE_TOL = 0.05          # 점수 합이 최고의 95% 이상이면 겹침이 적은 쪽을 고름
+MAX_ROUTES = 60           # OSRM 경로로 겹침을 잴 후보 수 상한 (같은 EC2의 OSRM이면 8개씩 병렬로 약 0.1초)
+OSRM_TIMEOUT_S = 1        # OSRM 호출 하나
+OSRM_BUDGET_S = 1.0       # 겹침 계산 전체 (넘으면 그때까지 잰 후보만 비교, 하나도 없으면 솔버 해)
 SCORE_SCALE = 1000        # penalty는 정수만 받음 (개선안 8장)
 TOLERANCE = 0.1           # 목표 거리 ±10%
 SHORT_PENALTY = 100       # Routing: 하한보다 1m 짧을 때마다 손해. 점수 합(최대 수천)보다 커서 하한을 거의 지킴
@@ -129,8 +147,59 @@ def cpsat_solve(target_km, max_places, time_ms, place_ids, scores, dist, exclude
     return order
 
 
-def solve(target_km, max_places, time_limit_ms, place_ids, scores, dist, excluded=()):
-    """dist: (n+2)×(n+2) 정수 m. 반환: (found, 방문 순서 placeIds, 총 거리 m)"""
+def overlap_of(legs):
+    """OSRM route legs(annotations=nodes,distance) → 같은 길(OSM 노드 쌍, 방향 무관)을 두 번 이상 지나는 거리 비율"""
+    segs = [((min(u, v), max(u, v)), d) for leg in legs
+            for u, v, d in zip(leg["annotation"]["nodes"], leg["annotation"]["nodes"][1:], leg["annotation"]["distance"])]
+    count = {}
+    for k, _ in segs:
+        count[k] = count.get(k, 0) + 1
+    total = sum(d for _, d in segs)
+    return sum(d for k, d in segs if count[k] > 1) / total if total else 0.0
+
+
+def osrm_overlap(pts):
+    url = (f"{OSRM}/route/v1/foot/" + ";".join(f"{lng:.6f},{lat:.6f}" for lat, lng in pts)
+           + "?overview=false&steps=false&annotations=nodes,distance")
+    with urllib.request.urlopen(url, timeout=OSRM_TIMEOUT_S) as r:
+        return overlap_of(json.load(r)["routes"][0]["legs"])
+
+
+def alternatives(max_places, n, w, dist, bans, lo, hi):
+    """점수 상위 ALT_K곳의 모든 조합·순서 중 거리 [lo, hi] 안이고 제외 조합이 아닌 것: [(점수 합, 노드 순서)]"""
+    top = sorted(range(1, n + 1), key=lambda i: -w[i - 1])[:ALT_K]
+    out = []
+    for k in range(1, max_places + 1):
+        for seq in itertools.permutations(top, k):
+            length = dist[0][seq[0]] + dist[seq[-1]][n + 1] + sum(dist[a][b] for a, b in zip(seq, seq[1:]))
+            if lo <= length <= hi and not any(b <= set(seq) for b in bans):
+                out.append((sum(w[i - 1] for i in seq), seq))
+    return out
+
+
+def least_overlap(best, cands, coords, loop):
+    """점수 합이 best의 (1 − SCORE_TOL) 이상인 후보 중 실제 경로 겹침이 가장 작은 것 (같으면 점수 높은 쪽). 반환: (노드 순서, 겹침)"""
+    floor = best[0] - SCORE_TOL * abs(best[0])
+    pool, seen = [], set()
+    for g, seq in sorted([best, *cands], key=lambda c: -c[0]):
+        key = min(seq, seq[::-1]) if loop else seq          # 순환이면 거꾸로 돌아도 같은 길
+        if g >= floor and key not in seen:
+            seen.add(key)
+            pool.append((g, seq))
+    ex = ThreadPoolExecutor(8)
+    futs = {ex.submit(osrm_overlap, [coords[0], *[coords[i] for i in c[1]], coords[-1]]): c for c in pool[:MAX_ROUTES]}
+    done, _ = wait(futs, timeout=OSRM_BUDGET_S)        # 전체 시간 상한: 그 안에 잰 후보만 비교
+    ex.shutdown(wait=False, cancel_futures=True)
+    measured = [(futs[f], f.result()) for f in done if f.exception() is None]
+    if not measured:
+        raise TimeoutError(f"{len(futs)}개 중 겹침을 잰 후보가 없음")
+    (g, seq), ov = min(measured, key=lambda z: (round(z[1], 2), -z[0][0]))
+    return seq, ov
+
+
+def solve(target_km, max_places, time_limit_ms, place_ids, scores, dist, excluded=(), coords=None):
+    """dist: (n+2)×(n+2) 정수 m. coords: dist와 같은 순서의 [lat, lng] (있으면 같은 길 왕복을 줄임)
+    반환: (found, 방문 순서 placeIds, 총 거리 m, 겹침 비율 또는 None)"""
     t0 = time.perf_counter()
     first = routing_solve(target_km, max_places, round(time_limit_ms * ROUTING_SHARE), place_ids, scores, dist, excluded)
     lo, hi = bounds(target_km)
@@ -150,6 +219,17 @@ def solve(target_km, max_places, time_limit_ms, place_ids, scores, dist, exclude
     gain = lambda o: sum(w[idx[p] - 1] for p in o)        # 실제 점수 합 (음수 장소가 끼면 그만큼 낮게 봄)
     candidates = [o for o in (better, first) if ok(o)]
     if not candidates:
-        return False, [], 0
+        return False, [], 0, None
     best = max(candidates, key=gain)          # 같은 점수면 앞쪽(CP-SAT, 거리까지 고려)
-    return True, best, length(best)
+    if coords is None:
+        return True, best, length(best), None
+    n = len(place_ids)
+    bans = [{idx[p] for p in c} for c in excluded if usable(c, idx)]
+    try:
+        seq, ov = least_overlap((gain(best), tuple(idx[p] for p in best)), alternatives(max_places, n, w, dist, bans, lo, hi),
+                                coords, coords[0] == coords[-1])
+    except (OSError, ValueError, KeyError, IndexError) as e:   # OSRM 연결·응답 문제: 코스는 그대로 줌
+        log.warning("겹침 계산 실패, 솔버 해 사용: %s", e)
+        return True, best, length(best), None
+    order = [place_ids[i - 1] for i in seq]
+    return True, order, length(order), ov
