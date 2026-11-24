@@ -11,7 +11,7 @@
 
 # AI 서버 (server/)
 
-API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, 추천 모델 점수)와 `POST /optimize`(B2)가 있어요.
+API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, 추천 모델 점수), `POST /optimize`(B2), `POST /reasons`(B3, 추천 이유)가 있어요.
 
 ```bash
 docker compose up -d --build        # 레포 루트: AI 서버(127.0.0.1:8000) + OSRM(5000). OSRM 전처리는 아래 1장
@@ -63,6 +63,21 @@ uvicorn server.app:app --port 8000
     Routing만 쓰면 3·5km 32건 중 28건만 최적이고 1건은 해를 놓쳐서 바꿈 (2026-11-06)
   - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복·50곳 초과, 음수 거리, 범위 밖 값
     (50곳 상한: BE는 상위 40곳을 보내고, 더 많으면 CP-SAT 모델이 커져 제한 시간 안에 좋은 해를 찾기 어려움. 후보 수를 바꾸면 같이 조정)
+- `POST /reasons`: 코스 장소별 추천 이유 한 문장 (Gemini, `server/reasons.py`). Spring이 코스 응답 뒤 백그라운드로 호출 (제한 5초)
+
+  ```json
+  // 요청 (장소 1~10곳, evidence 1개 이상)
+  {"preferences": ["NIGHT_VIEW"], "isNight": true,
+   "places": [{"placeId": "T1116925", "name": "덕수궁 돌담길", "overview": "장소 개요", "evidence": ["night_spot", "취향 유사도 높음"]}]}
+  // 응답 (요청 순서). 검증에 실패한 장소는 reason null, usedEvidence [] → Spring이 개요로 대체
+  {"reasons": [{"placeId": "T1116925", "reason": "돌담을 따라 조명이 이어져 밤에도 걷기 편해요", "usedEvidence": ["night_spot"]}]}
+  ```
+
+  - 키: 환경 변수 `GEMINI_API_KEY` (Compose는 레포 루트 `.env`에서 읽음). 모델은 `GEMINI_MODEL`(기본 `gemini-3.5-flash-lite`, 생각 minimal), Gemini 호출 제한 4초.
+    2026-11-24 장소 3곳: 3.5-flash-lite 1.4~1.8초 · 2.5-flash 2.1초(생각 끔, 켜면 5.6초로 5초 제한 초과) · 3.5-flash 2.7~3.0초
+  - 근거 검증 (하나라도 걸리면 그 장소만 null): 요청에 없는 장소·빠뜨린 장소, `usedEvidence`가 비었거나 받지 않은 근거,
+    이름·개요에 없는 숫자, `night_spot` 근거도 개요도 없는데 야경·조명·밤을 말함, 80자 초과
+  - Gemini 호출 실패(키 없음·시간 초과·응답 형식 오류): `REASON_FAILED` 502 → Spring이 전부 개요로 대체
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
@@ -70,6 +85,7 @@ uvicorn server.app:app --port 8000
   - `python -m server.test_recommend`: 쿼리 2,000건 점수가 학습 때 점수와 같은지, 모델 파일이 없을 때 규칙 기준선으로 대신하는지, 오류 형식, 후보 수별 응답 시간
   - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
   - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
+  - `python -m server.test_reasons`: 가짜 Gemini 응답으로 근거 검증·장소 순서·실패 응답. `--live`면 실제 Gemini 호출 (키 필요)
 - 측정 (2026-11-06)
   - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값, 규칙 기준선 시절): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
   - `/recommend` MLP (2026-11-13, Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 7.9ms · 200곳 6.6ms · 1,480곳 20.4ms (최대 57.6ms).
