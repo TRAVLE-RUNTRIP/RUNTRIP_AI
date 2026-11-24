@@ -5,6 +5,8 @@ COPY server/requirements.txt server/
 RUN pip install --no-cache-dir -r server/requirements.txt
 # 점수 계산이 poc/의 피처·규칙 기준선 코드를 그대로 씀
 COPY poc/features.py poc/evaluate.py poc/
+# /safety: 조명 점수 코드와 서울 도로·보안등·구 경계 데이터
+COPY safety/safety.py safety/segment_stats.py safety/서울_도로.parquet safety/서울_보안등.csv safety/서울_구경계.geojson safety/
 COPY server/ server/
 # root가 아닌 사용자로 실행 (파일은 root 소유로 둬서 서버가 앱·서빙 파일을 고칠 수 없음)
 RUN useradd --system --no-create-home app

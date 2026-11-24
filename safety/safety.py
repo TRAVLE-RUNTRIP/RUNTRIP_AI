@@ -1,4 +1,4 @@
-"""코스 경로를 받아 구간별 가로등 등급·안내 문구·야간 경고·조명 환경 점수(0~100)를 계산합니다. 경로는 바꾸지 않고 조언만 합니다.
+"""코스 경로를 받아 안전도를 계산합니다: 조명(가로등 등급·야간 경고·score 0~100)과 보행 환경(길 종류·인도 없음·계단·비포장, walk_score 0~100). 경로는 바꾸지 않고 조언만 합니다.
 기준값은 segment_stats.py 결과(2026-11-03 재계산: 같은 좌표 1개로, 25m 조각·도로 구간 같은 방식으로 셈, 종로구·중구)에서 정했습니다.
 사용: idx = SafetyIndex(edges, lamps);  idx.grade_course([(경도, 위도), ...], night=True)
 자가 점검: python safety.py"""
@@ -22,6 +22,65 @@ LEVELS = [(80, "좋음"), (60, "보통"), (0, "주의")]    # 앱 표시용 점�
 # ponytail: 0.5는 임시값, FE와 표시 방식 확정 시 조정
 MIN_DATA_RATIO = 0.5
 
+# 보행 환경: 경로 25m 조각마다 가장 가까운 OSM 길의 종류로 판정. sidewalk 태그는 차도의 약 7%에만 있어 명시된 no만 '인도 없음' (종로·중구 2026-11-17)
+# 가중치 F안 (2026-11-17, 종로·중구 무작위 경로 300개): 대로를 크게 깎으면 조명의 '큰길 추정'을 뒤집은 값이 됨(상관 -0.6) → 대로 0.5로 상관 -0.33
+# ponytail: 가중치는 임시값, 팀 합의·완주 로그로 조정. 조명 score와 합칠지도 미정이라 따로 냄
+WALK_WEIGHT = {"보행로": 1.0, "골목": 0.7, "계단": 0.6, "비포장": 0.6, "대로": 0.5, "좁은 차도": 0.2, "인도 없음": 0.0}
+FOOT = {"footway", "pedestrian", "path", "cycleway", "living_street"}
+CAR = BIG | {"tertiary"}                              # + *_link. BIG = 대로, 나머지 = 좁은 차도
+SHORT_M = 50                                          # 이보다 짧은 보행 구간은 앞 구간에 합침 (교차로에서 25m씩 끊겨 지도가 얼룩덜룩해짐)
+KEEP_SHORT = {"인도 없음"}                            # 짧아도 위험하니 합치지 않음
+UNPAVED = {"unpaved", "dirt", "earth", "ground", "gravel", "grass", "sand", "mud", "pebblestone"}
+SNAP_M = 15                                           # OSRM 경로는 OSM 길 위를 지나므로 15m 안에 길이 없으면 '자료없음'
+WALK_WARN = {"인도 없음": "인도가 없는 차도예요", "계단": "계단이 있어요", "비포장": "비포장 길이에요"}
+
+
+def walk_grade(hw, surface, sidewalk, both):
+    first = lambda v: v[0] if isinstance(v, list) else v   # 합쳐진 구간은 태그가 리스트
+    hw = str(first(hw))
+    if hw == "steps":
+        return "계단"
+    if first(surface) in UNPAVED:
+        return "비포장"
+    if hw in FOOT:
+        return "보행로"
+    if hw in CAR or hw.endswith("_link"):
+        return "인도 없음" if "no" in (first(sidewalk), first(both)) else "대로" if hw in BIG else "좁은 차도"
+    return "골목"
+
+
+def absorb_short(segs):
+    """SHORT_M 미만 구간을 앞 구간에 합침 (첫 구간이면 다음 구간에). KEEP_SHORT 등급은 남기고, 그 구간이 다른 구간을 흡수하지도 않음"""
+    short = lambda s: s[1] - s[0] < SHORT_M and s[2] not in KEEP_SHORT
+    out = []
+    for s in segs:
+        if out and short(s) and out[-1][2] not in KEEP_SHORT:
+            out[-1][1] = s[1]
+        else:
+            out.append(list(s))
+    if len(out) > 1 and short(out[0]) and out[1][2] not in KEEP_SHORT:
+        start = out.pop(0)[0]
+        out[0][0] = start
+    return runs([g for _, _, g in out], [b - a for a, b, _ in out])
+
+
+def runs(labels, lens):
+    """같은 등급 조각을 이어 붙임 → [[시작m, 끝m, 등급], ...]"""
+    out, pos = [], 0.0
+    for g, L in zip(labels, lens):
+        if out and out[-1][2] == g:
+            out[-1][1] = pos + L
+        else:
+            out.append([pos, pos + L, g])
+        pos += L
+    return out
+
+
+def score_of(segs, weight):
+    rated = [(weight[g], b - a) for a, b, g in segs if g in weight]
+    total = sum(L for _, L in rated)
+    return round(100 * sum(w * L for w, L in rated) / total) if total else None
+
 
 class SafetyIndex:
     def __init__(self, edges, lamps):
@@ -33,6 +92,9 @@ class SafetyIndex:
         self.big = e.loc[is_big & (lit != "no"), ["geometry"]]
         self.lamps = lamp_points(lamps)
         self.hull = data_area(self.lamps)             # 밖은 '자료없음': 어두움으로 보지 않고 점수에서도 뺌
+        tags = e.reindex(columns=["highway", "surface", "sidewalk", "sidewalk:both"])   # 없는 태그 열은 빈 값 (OSMnx 기본 설정엔 sidewalk·surface 없음)
+        tags = tags.astype(object).where(tags.notna(), None)   # parquet의 빈 값(pd.NA)은 비교하면 오류 → None
+        self.walk = gpd.GeoDataFrame({"grade": [walk_grade(*t) for t in tags.itertuples(index=False)]}, geometry=e.geometry, crs=5179)
 
     def grade_course(self, coords, night=False):
         line = gpd.GeoSeries([LineString(coords)], crs=4326).to_crs(5179).iloc[0]
@@ -49,32 +111,22 @@ class SafetyIndex:
                  else "많음" if dens[i] >= MANY else "보통" for i, ok in enumerate(inside)]
         data_ratio = sum(L for L, ok in zip(p["len_m"], inside) if ok) / p["len_m"].sum()
 
-        segs = []                                     # 같은 등급 조각을 이어 붙임: [시작m, 끝m, 등급]
-        pos = 0.0
-        for g, L in zip(grade, p["len_m"]):
-            if segs and segs[-1][2] == g:
-                segs[-1][1] = pos + L
-            else:
-                segs.append([pos, pos + L, g])
-            pos += L
+        segs = runs(grade, p["len_m"])
         for s in segs:
             if s[2] == "적음" and s[1] - s[0] < DARK_RUN_M:
                 s[2] = "보통"
-        merged = []
-        for s in segs:
-            if merged and merged[-1][2] == s[2]:
-                merged[-1][1] = s[1]
-            else:
-                merged.append(s)
+        merged = runs([s[2] for s in segs], [s[1] - s[0] for s in segs])
+        near = gpd.sjoin_nearest(mid, self.walk, max_distance=SNAP_M)
+        near = near[~near.index.duplicated()]["grade"]   # 같은 거리의 길이 여럿이면 첫 번째
+        walk = absorb_short(runs([near.get(i, "자료없음") for i in range(n)], p["len_m"]))
 
         warnings = [f"{s[0]/1000:.1f}~{s[1]/1000:.1f}km 구간({s[1]-s[0]:.0f}m)은 확인된 가로등이 적어요" for s in merged if s[2] == "적음"]
         if night and warnings:
             warnings.insert(0, "밤에는 확인된 가로등이 적은 구간이 있어요. 밝은 옷과 라이트를 챙기세요")
         if any(s[2] == "자료없음" for s in merged):
             warnings.append("일부 구간은 가로등 자료가 없어 안전 정보를 표시하지 않아요")
-        rated = [(WEIGHT[s[2]], s[1] - s[0]) for s in merged if s[2] in WEIGHT]
-        total = sum(L for _, L in rated)
-        score = round(100 * sum(w * L for w, L in rated) / total) if total else None
+        warnings += [f"{a/1000:.1f}~{b/1000:.1f}km 구간({b-a:.0f}m)은 {WALK_WARN[g]}" for a, b, g in walk if g in WALK_WARN]
+        score = score_of(merged, WEIGHT)
         level = None if score is None else next(name for cut, name in LEVELS if score >= cut)
         if score is not None and data_ratio < MIN_DATA_RATIO:
             level = "자료부족"
@@ -82,7 +134,8 @@ class SafetyIndex:
         # coverage: 보안등으로 판정한(관측) 길이 비율. 행정구역 기준 자료 확보율이지 그 구의 자료가 빠짐없다는 뜻은 아님
         # estimated: 큰길(조명 추정) 길이 비율. 점수엔 PPT 설계(도로 유형 기반)대로 들어가므로 둘을 같이 보여 줘야 함
         ratio = lambda gs: round(sum(b - a for a, b, g in merged if g in gs) / line.length, 2) if line.length else 0
-        return {"score": score, "level": level, "coverage": ratio({"많음", "보통", "적음"}), "estimated": ratio({"큰길(조명 추정)"}), "segments": [{"start_m": round(a), "end_m": round(b), "grade": g} for a, b, g in merged], "warnings": warnings}
+        return {"score": score, "level": level, "coverage": ratio({"많음", "보통", "적음"}), "estimated": ratio({"큰길(조명 추정)"}), "segments": [{"start_m": round(a), "end_m": round(b), "grade": g} for a, b, g in merged],
+                "walk_score": score_of(walk, WALK_WEIGHT), "walk_segments": [{"start_m": round(a), "end_m": round(b), "grade": g} for a, b, g in walk], "warnings": warnings}
 
 
 if __name__ == "__main__":
@@ -123,4 +176,23 @@ if __name__ == "__main__":
     assert r6["level"] == "자료부족" and r6["score"] == 100 and r6["warnings"][-1].endswith("참고용이에요"), r6
     r7 = SafetyIndex(edges, lamps).grade_course([(dx(400), lat0), (dx(600), lat0)])
     assert r7["level"] == "좋음" and r7["score"] == 100, r7
+    assert r2["walk_score"] == 70 and r2["walk_segments"][0]["grade"] == "골목", r2   # sidewalk·surface 열 없는 지도도 동작
+    r2b = SafetyIndex(edges, lamps).grade_course([(dx(0), lat0), (dx(600), lat0)])
+    assert [s["grade"] for s in r2b["walk_segments"]] == ["골목", "대로"], r2b
+    # 보행 환경: 보행로 200m · 계단 100m · 인도 없는 큰길 150m · 자갈 골목 150m
+    w = gpd.GeoDataFrame({"highway": ["footway", "steps", "primary", "residential"], "sidewalk": [None, None, "no", None], "surface": [None, None, None, "gravel"]},
+                         geometry=[LineString([(dx(a), lat0), (dx(b), lat0)]) for a, b in [(0, 200), (200, 300), (300, 450), (450, 600)]], crs=4326)
+    r8 = SafetyIndex(w, lamps).grade_course([(dx(0), lat0), (dx(600), lat0)])
+    assert [s["grade"] for s in r8["walk_segments"]] == ["보행로", "계단", "인도 없음", "비포장"], r8
+    # 짧은 구간 합치기: 25m 골목은 보행로에 합쳐지고, 30m 인도 없음은 남음
+    w2 = gpd.GeoDataFrame({"highway": ["footway", "residential", "footway", "tertiary", "footway"], "sidewalk": [None, None, None, "no", None]},
+                          geometry=[LineString([(dx(a), lat0), (dx(b), lat0)]) for a, b in [(0, 200), (200, 225), (225, 400), (400, 430), (430, 600)]], crs=4326)
+    g9 = [s["grade"] for s in SafetyIndex(w2, lamps).grade_course([(dx(0), lat0), (dx(600), lat0)])["walk_segments"]]
+    assert g9 == ["보행로", "인도 없음", "보행로"], g9
+    r9 = SafetyIndex(w2, lamps).grade_course([(dx(190), lat0), (dx(600), lat0)])   # 첫 구간(짧은 골목)이 다음 구간에 합쳐짐
+    ws = r9["walk_segments"]
+    assert [s["grade"] for s in ws] == ["보행로", "인도 없음", "보행로"] and ws[0]["start_m"] == 0, ws
+    assert all(a["end_m"] == b["start_m"] for a, b in zip(ws, ws[1:])) and ws[-1]["end_m"] == r9["segments"][-1]["end_m"], ws   # 빈틈·겹침 없이 경로 끝까지
+    assert 50 < r8["walk_score"] < 65 and sum(x.endswith(("차도예요", "계단이 있어요", "비포장 길이에요")) for x in r8["warnings"]) == 3, r8
+    assert SafetyIndex(w, lamps).grade_course([(dx(0), lat0 + 0.001), (dx(100), lat0 + 0.001)])["walk_score"] is None   # 길에서 110m 떨어진 경로 → 자료없음
     print("자가 점검 통과")
