@@ -66,8 +66,8 @@ uvicorn server.app:app --port 8000
 - `POST /safety`: 코스 경로의 조명 환경 점수 (경로는 바꾸지 않음). 계산은 아래 2장 `safety.py` 그대로, `server/safety_course.py`가 API 형식으로 바꿈
 
   ```json
-  // 요청: OSRM 경로선 [위도, 경도] (OSRM GeoJSON은 [경도, 위도]라 뒤집어서)
-  {"path": [[37.5658, 126.9751], [37.5661, 126.9755]], "isNight": true}
+  // 요청: OSRM 경로선 [위도, 경도] (OSRM GeoJSON은 [경도, 위도]라 뒤집어서). 아래 응답은 점 53개(인덱스 0~52) 경로 기준, 앞 2개만 표시
+  {"path": [[37.5658, 126.9751], [37.5661, 126.9755], ...], "isNight": true}
   // 응답. segments의 fromIndex·toIndex는 path 위치, 이웃 구간이 같은 점을 공유해 빈틈·겹침 없음
   {"score": 87, "level": "좋음", "coverage": 0.15, "estimated": 0.85, "hasLowSegment": true,
    "segments": [{"fromIndex": 0, "toIndex": 40, "grade": "큰길(조명 추정)"}, {"fromIndex": 40, "toIndex": 52, "grade": "적음"}],
