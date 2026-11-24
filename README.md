@@ -73,10 +73,11 @@ uvicorn server.app:app --port 8000
   {"reasons": [{"placeId": "T1116925", "reason": "돌담을 따라 조명이 이어져 밤에도 걷기 편해요", "usedEvidence": ["night_spot"]}]}
   ```
 
-  - 키: 환경 변수 `GEMINI_API_KEY` (Compose는 레포 루트 `.env`에서 읽음). 모델은 `GEMINI_MODEL`(기본 `gemini-3.5-flash-lite`, 생각 minimal), Gemini 호출 제한 4초.
+  - 키: 환경 변수 `GEMINI_API_KEY` (Compose는 레포 루트 `.env`에서 읽음). 모델은 `gemini-3.5-flash-lite`(생각 minimal, `server/reasons.py` URL), Gemini 호출 제한 4초.
     2026-11-24 장소 3곳: 3.5-flash-lite 1.4~1.8초 · 2.5-flash 2.1초(생각 끔, 켜면 5.6초로 5초 제한 초과) · 3.5-flash 2.7~3.0초
   - 근거 검증 (하나라도 걸리면 그 장소만 null): 요청에 없는 장소·빠뜨린 장소, `usedEvidence`가 비었거나 받지 않은 근거,
-    이름·개요에 없는 숫자, `night_spot` 근거도 개요도 없는데 야경·조명·밤을 말함, 80자 초과
+    이름·개요에 없는 숫자(숫자 단위로 비교, "200"≠"2005"), `night_spot`을 쓰지 않았고 개요에도 없는데 야경·조명·불빛을 말함
+    (낮 코스면 밤·야간도 포함, 밤 코스의 '밤에도 달리기 좋아요'는 허용), 80자 초과. 장소 하나의 값 형식이 이상하면 그 장소만 null
   - Gemini 호출 실패(키 없음·시간 초과·응답 형식 오류): `REASON_FAILED` 502 → Spring이 전부 개요로 대체
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:

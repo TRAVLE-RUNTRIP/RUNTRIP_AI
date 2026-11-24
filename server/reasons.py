@@ -1,6 +1,7 @@
 """/reasons (API 명세 B3): Gemini로 장소별 추천 이유 한 문장을 만들고, 받은 근거만 썼는지 검증한다.
 검증에 실패한 장소는 reason = null (Spring이 장소 개요로 대체). Gemini 호출 자체가 실패하면 GeminiError → 오류 응답.
 키: 환경 변수 GEMINI_API_KEY (Compose는 레포 루트 .env에서 읽음)"""
+import http.client
 import json
 import os
 import re
@@ -8,14 +9,16 @@ import urllib.error
 import urllib.request
 
 # 2026-11-24 비교 (장소 3곳): 3.5-flash-lite 1.4~1.8초 · 2.5-flash 2.1초(생각 끔, 켜면 5.6초) · 3.5-flash 2.7~3.0초, 문장 품질 비슷
-# ponytail: thinkingLevel은 Gemini 3 계열 설정. GEMINI_MODEL을 2.x로 바꾸면 thinkingConfig도 thinkingBudget: 0으로
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
-URL = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
-TIMEOUT_S = 4                     # BE 제한 5초 안에 오류 응답까지 끝내도록
+# 모델을 바꾸면 thinkingConfig도 확인 (thinkingLevel은 Gemini 3 계열 설정, 2.x는 thinkingBudget)
+URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
+# ponytail: 소켓 동작마다의 제한이라 응답이 조금씩 오면 4초를 넘길 수 있음. 그래도 BE가 5초에서 끊고 개요로 대체해 결과는 같음
+TIMEOUT_S = 4
 MAX_LEN = 80                      # 한 문장 안팎
 PREF_KO = {"NIGHT_VIEW": "야경", "ATTRACTION": "관광 명소", "NATURE": "자연·공원"}
-NIGHT_WORDS = ("야경", "조명", "불빛", "야간", "밤")     # night_spot 근거나 개요에 없으면 지어낸 것
+VIEW_WORDS = ("야경", "조명", "불빛")   # 이 장소의 밤 풍경 주장: night_spot을 실제로 썼거나 개요에 있어야 함
+TIME_WORDS = ("야간", "밤")             # 밤 코스면 '밤에도 달리기 좋아요'처럼 시간만 말하는 건 허용
 NIGHT_EVIDENCE = "night_spot"
+NUM = r"\d+(?:\.\d+)?"
 
 SCHEMA = {"type": "OBJECT", "properties": {"reasons": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
     "placeId": {"type": "STRING"}, "reason": {"type": "STRING"}, "usedEvidence": {"type": "ARRAY", "items": {"type": "STRING"}}},
@@ -33,7 +36,7 @@ def prompt(preferences, is_night, places):
         "규칙:",
         f"- 장소마다 {MAX_LEN}자 이내 한 문장, '~해요' 말투",
         "- 그 장소의 '개요'와 '근거'에 있는 사실만 씁니다. 숫자·연도·시설·이름은 개요에 있는 것만 씁니다",
-        f"- 근거에 {NIGHT_EVIDENCE}가 없으면 야경·조명·밤 풍경을 말하지 않습니다 (개요에 있으면 가능)",
+        f"- 근거에 {NIGHT_EVIDENCE}가 없으면 야경·조명·불빛을 말하지 않습니다 (개요에 있으면 가능)",
         "- usedEvidence에는 문장에 실제로 쓴 근거를 받은 그대로 적습니다 (1개 이상)",
         "- 아래 장소만, 받은 placeId 그대로 답합니다",
         "",
@@ -51,41 +54,47 @@ def call_gemini(text):
     body = {"contents": [{"parts": [{"text": text}]}],
             "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "responseSchema": SCHEMA,
                                  "thinkingConfig": {"thinkingLevel": "minimal"}}}   # 생각을 켜면 5초 제한을 넘김
-    req = urllib.request.Request(URL.format(MODEL), json.dumps(body).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
+    req = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
-            return json.load(r)["candidates"][0]["content"]["parts"][0]["text"]
+            return "".join(p.get("text", "") for p in json.load(r)["candidates"][0]["content"]["parts"])   # JSON이 여러 조각으로 올 수 있음
     except urllib.error.HTTPError as e:
         raise GeminiError(f"Gemini HTTP {e.code}") from e
-    except (OSError, KeyError, IndexError, ValueError) as e:      # 시간 초과·연결 실패·응답 모양이 다름
+    # 시간 초과·연결 실패(OSError), 본문 중간에 끊김(HTTPException), 응답 모양이 다름
+    except (OSError, http.client.HTTPException, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
         raise GeminiError(f"Gemini 호출 실패: {type(e).__name__}") from e
 
 
-def check(reason, used, place):
+def check(reason, used, place, is_night):
     """받은 근거만 썼는지. 통과하면 None, 아니면 실패 이유"""
     if not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_LEN:
         return "빈 문장이거나 너무 김"
     if not used or not set(used) <= set(place.evidence):
         return "받지 않은 근거"
     source = f"{place.name} {place.overview or ''}"
-    if any(n not in source for n in re.findall(r"\d+", reason)):
+    if not set(re.findall(NUM, reason)) <= set(re.findall(NUM, source)):   # 글자 일부가 아니라 숫자 단위로 비교 ("200" ≠ "2005")
         return "개요에 없는 숫자"
-    if any(w in reason for w in NIGHT_WORDS) and NIGHT_EVIDENCE not in place.evidence and not any(w in source for w in NIGHT_WORDS):
+    night = VIEW_WORDS + (() if is_night else TIME_WORDS)
+    if any(w in reason for w in night) and NIGHT_EVIDENCE not in used and not any(w in source for w in VIEW_WORDS + TIME_WORDS):
         return "근거 없는 야경·조명"
     return None
 
 
 def make_reasons(preferences, is_night, places):
-    """요청 순서대로 [{placeId, reason, usedEvidence}]. 요청에 없는 장소는 버리고, 답이 없거나 검증 실패면 reason = null"""
+    """요청 순서대로 [{placeId, reason, usedEvidence}]. 요청에 없는 장소는 버리고, 답이 없거나 검증 실패면 reason = null.
+    응답 전체가 형식에 안 맞으면 GeminiError, 장소 하나의 값이 이상하면 그 장소만 null"""
     try:
         out = json.loads(call_gemini(prompt(preferences, is_night, places)))["reasons"]
+        if not isinstance(out, list):
+            raise TypeError("reasons is not a list")
     except (ValueError, KeyError, TypeError) as e:
         raise GeminiError(f"Gemini 응답 형식 오류: {type(e).__name__}") from e
-    got = {r.get("placeId"): r for r in out if isinstance(r, dict)}
+    got = {r["placeId"]: r for r in out if isinstance(r, dict) and isinstance(r.get("placeId"), str)}
     res = []
     for p in places:
         r = got.get(p.placeId, {})
-        used = r.get("usedEvidence") if isinstance(r.get("usedEvidence"), list) else []
-        ok = p.placeId in got and check(r.get("reason"), used, p) is None
+        used = r.get("usedEvidence")
+        used = used if isinstance(used, list) and all(isinstance(u, str) for u in used) else []
+        ok = p.placeId in got and check(r.get("reason"), used, p, is_night) is None
         res.append({"placeId": p.placeId, "reason": r["reason"].strip() if ok else None, "usedEvidence": used if ok else []})
     return res

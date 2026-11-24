@@ -49,6 +49,26 @@ def main(c):
     out = c.post("/reasons", json=BODY).json()["reasons"]
     assert out[1]["reason"] is not None and out[0]["reason"] is None, out              # 개요에 있는 숫자는 통과, 빠뜨린 A는 null
 
+    def one(pid, text, used, night=True):
+        fake([{"placeId": pid, "reason": text, "usedEvidence": used}])
+        out = c.post("/reasons", json=dict(BODY, isNight=night)).json()["reasons"]
+        return next(x["reason"] for x in out if x["placeId"] == pid)
+    assert one("B", "200년 역사의 숲이에요", ["취향 유사도 높음"]) is None                # "200"은 "2005"의 일부일 뿐
+    assert one("A", "1km 산책로예요", ["night_spot"]) is None and one("A", "1.1km 산책로예요", ["night_spot"])
+    assert one("C", "밤에도 물길을 따라 달리기 좋아요", ["취향 유사도 높음"])              # 밤 코스에서 시간만 말하면 통과
+    assert one("C", "밤에도 물길을 따라 달리기 좋아요", ["취향 유사도 높음"], night=False) is None
+    assert one("C", "물길에 불빛이 비쳐 예뻐요", ["취향 유사도 높음"]) is None              # 근거 없는 밤 풍경
+    assert one("A", "야경이 아름다워요", ["취향 유사도 높음"]) is None                      # night_spot을 받았어도 안 썼다고 함
+
+    # 형식만 이상한 장소는 그 장소만 null, 응답 전체가 이상하면 502
+    fake([{"placeId": ["A"], "reason": "x", "usedEvidence": ["night_spot"]},
+          {"placeId": "B", "reason": "2005년 문을 연 도시 숲이에요", "usedEvidence": [{"x": 1}]},
+          {"placeId": "C", "reason": "청계천을 따라 달려요", "usedEvidence": ["취향 유사도 높음"]}])
+    out = c.post("/reasons", json=BODY)
+    assert out.status_code == 200 and [x["reason"] is None for x in out.json()["reasons"]] == [True, True, False], out.text
+    R.call_gemini = lambda text: json.dumps({"reasons": 5})
+    assert c.post("/reasons", json=BODY).status_code == 502
+
     R.call_gemini = lambda text: "not json"
     r = c.post("/reasons", json=BODY)
     assert r.status_code == 502 and r.json()["code"] == "REASON_FAILED", r.text
