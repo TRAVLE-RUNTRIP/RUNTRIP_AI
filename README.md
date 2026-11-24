@@ -4,14 +4,14 @@
 |---|---|---|
 | [poc/](poc/README.md), [data/](data/) | 장소 추천 모델 PoC (피처·규칙 기준선·MLP 학습/평가)와 데이터 | [poc/README.md](poc/README.md) |
 | `osrm/` | OSRM 도보 경로 서버 | 아래 1장 |
-| `safety/` | 조명 환경 점수 (`safety.py`, `서울_보안등.csv`, 수집·점검 스크립트) | 아래 2·3장 |
+| `safety/` | 안전도: 조명 + 보행 환경 (`safety.py`, `서울_보안등.csv`, 수집·점검 스크립트) | 아래 2·3장 |
 | `server/`, `compose.yaml` | AI 서버 (FastAPI, API 명세 B파트) | 아래 AI 서버 |
 
 ---
 
 # AI 서버 (server/)
 
-API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, 추천 모델 점수)와 `POST /optimize`(B2)가 있어요.
+API 명세 B파트(백엔드 → AI). 지금은 `POST /recommend`(B1, 추천 모델 점수), `POST /optimize`(B2), `POST /safety`(B4, 조명 환경 점수)가 있어요.
 
 ```bash
 docker compose up -d --build        # 레포 루트: AI 서버(127.0.0.1:8000) + OSRM(5000). OSRM 전처리는 아래 1장
@@ -63,6 +63,22 @@ uvicorn server.app:app --port 8000
     Routing만 쓰면 3·5km 32건 중 28건만 최적이고 1건은 해를 놓쳐서 바꿈 (2026-11-06)
   - 요청 오류(`VALIDATION_ERROR` 400): 거리표가 (장소 수 + 2)² 가 아님, `scores` 개수 다름, `placeIds` 중복·50곳 초과, 음수 거리, 범위 밖 값
     (50곳 상한: BE는 상위 40곳을 보내고, 더 많으면 CP-SAT 모델이 커져 제한 시간 안에 좋은 해를 찾기 어려움. 후보 수를 바꾸면 같이 조정)
+- `POST /safety`: 코스 경로의 조명 환경 점수 (경로는 바꾸지 않음). 계산은 아래 2장 `safety.py` 그대로, `server/safety_course.py`가 API 형식으로 바꿈
+
+  ```json
+  // 요청: OSRM 경로선 [위도, 경도] (OSRM GeoJSON은 [경도, 위도]라 뒤집어서)
+  {"path": [[37.5658, 126.9751], [37.5661, 126.9755]], "isNight": true}
+  // 응답. segments의 fromIndex·toIndex는 path 위치, 이웃 구간이 같은 점을 공유해 빈틈·겹침 없음
+  {"score": 87, "level": "좋음", "coverage": 0.15, "estimated": 0.85, "hasLowSegment": true,
+   "segments": [{"fromIndex": 0, "toIndex": 40, "grade": "큰길(조명 추정)"}, {"fromIndex": 40, "toIndex": 52, "grade": "적음"}],
+   "warnings": ["밤에는 확인된 가로등이 적은 구간이 있어요. 밝은 옷과 라이트를 챙기세요"]}
+  ```
+
+  - `grade`: 큰길(조명 추정) · 많음 · 보통 · 적음 · 자료없음. `level`: 좋음(80↑) · 보통(60↑) · 주의 · 자료부족(자료 범위 안이 50% 미만), 점수가 null이면 null
+  - 보행 환경(아래 2장 `walk_score`·계단·인도 없음 경고)은 FE 표시 방식이 정해질 때까지 `/safety` 응답에 넣지 않음
+  - 25m 조각 경계를 가장 가까운 path 점으로 옮기므로, 점 사이에 끼는 아주 짧은 구간은 앞뒤에 합쳐짐 (적음은 100m 이상이라 OSRM 경로에선 남음)
+  - 서버 시작 때 `safety/서울_도로.parquet`(OSM 도로 13만 개, `safety/build_roads.py`로 osrm/의 pbf에서 만듦)·`서울_보안등.csv`를 읽음: 약 3초, 메모리 약 270MB 더 씀
+  - 요청 오류(`VALIDATION_ERROR` 400): 점 2개 미만·모두 같은 점, 위도·경도 범위 밖, 20,000점 초과
 - 서빙 파일 `server/data/places_serving.csv`: 장소별 카테고리, `night_spot`, 취향 3개와의 KURE 유사도. 서버는 KURE 모델(2.3GB)을 쓰지 않아요.
   `places.csv`나 취향 문장(`poc/embed_kure.py` `PREF_QUERY`)이 바뀌면 다시 만들어요:
   `python poc/embed_kure.py` → `python server/build_serving.py` → `python poc/features.py` → `python -m server.test_recommend`
@@ -70,13 +86,16 @@ uvicorn server.app:app --port 8000
   - `python -m server.test_recommend`: 쿼리 2,000건 점수가 학습 때 점수와 같은지, 모델 파일이 없을 때 규칙 기준선으로 대신하는지, 오류 형식, 후보 수별 응답 시간
   - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
   - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
+  - `python -m server.test_safety`: 구간 → path 인덱스 변환, 빈틈·겹침, 자료 밖(부산) 경로, 오류 형식, 5·10km 응답 시간
 - 측정 (2026-11-06)
   - `/recommend` (Docker 컨테이너, HTTP 20회 중앙값, 규칙 기준선 시절): 후보 40곳 5.5ms · 200곳 5.7ms · 1,480곳(전체) 17.2ms
   - `/recommend` MLP (2026-11-13, Docker 컨테이너, HTTP 20회 중앙값): 후보 40곳 7.9ms · 200곳 6.6ms · 1,480곳 20.4ms (최대 57.6ms).
     서버 안 처리 시간(TestClient)은 40곳 2.8ms · 200곳 3.7ms · 1,480곳 7.6ms
   - `/optimize` (`bench_optimize`, 후보 상위 40곳, 제한 500ms): 48건 중 47건 해를 찾음 (못 찾은 1건은 완전 탐색으로도 답이 없음),
     찾은 코스 모두 목표 ±10%·OSRM 실제 경로 거리와 같음, 3·5km 32건 전부 최적, 다시 만들기 128/141, 응답 중앙값 421ms · 최대 603ms
-  - 이미지 539MB (OR-Tools 포함), 실행 메모리 약 82MB
+  - `/safety` (2026-11-24, EC2 m7i-flex.large Docker 컨테이너, HTTP 5회): OSRM 실제 경로 2.7km 31ms · 5.8km 57ms · 15.6km 145ms.
+    서버 안 처리 시간(TestClient, 로컬 PC 직선 경로)은 5km 중앙 128ms · 10km 259ms
+  - 이미지 1GB (OR-Tools·geopandas·도로·보안등 데이터 포함, `/safety` 전 539MB), 실행 메모리 약 356MB (`/safety` 전 82MB)
 
 ---
 
@@ -125,7 +144,7 @@ docker compose up -d          # 끄기: docker compose down
   - 포트: AI 서버(8000)·OSRM(5000) 모두 127.0.0.1에만 열림. BE 컨테이너는 같은 Compose 네트워크(`runtrip_default`)에서 `http://ai-server:8000`, `http://osrm:5000`으로 호출
   - AI 서버와 OSRM을 함께 실행하려면 레포 루트에서 `docker compose up -d --build`를 실행하고, BE 컨테이너를 `runtrip_default`에 연결. `osrm/`에서 따로 실행 중이면 먼저 그 폴더에서 `docker compose down` 실행
 
-## 2. 조명 환경 점수 (safety/safety.py)
+## 2. 안전도 (safety/safety.py)
 
 2·3장의 명령은 모두 `safety/` 폴더에서 실행합니다 (스크립트가 `서울_보안등.csv`, `서울_구경계.geojson`, `lamps/` 등을 현재 폴더에서 찾음).
 
@@ -138,12 +157,27 @@ python safety.py          # 자가 점검
 ```python
 import osmnx as ox, pandas as pd
 from safety import SafetyIndex
-ox.settings.useful_tags_way = list(set(ox.settings.useful_tags_way + ["lit"]))   # 필수: 기본값엔 lit이 없어 lit=no 큰길도 '조명 추정'이 됨
+ox.settings.useful_tags_way = list(set(ox.settings.useful_tags_way + ["lit", "sidewalk", "sidewalk:both", "surface"]))   # 필수: 기본값엔 없어 lit=no 큰길도 '조명 추정', 인도 없음·비포장은 판정 안 됨
 edges = ox.graph_to_gdfs(ox.graph_from_point((37.5685, 126.9850), dist=2500, network_type="all"), nodes=False)
 idx = SafetyIndex(edges, pd.read_csv("서울_보안등.csv"))
 idx.grade_course([(126.9918, 37.5704), (126.9850, 37.5820)], night=True)   # OSRM 경로 좌표를 그대로 넣으면 됨
-# → {"score": 81, "level": "좋음", "coverage": 0.59, "estimated": 0.41, "segments": [{"start_m", "end_m", "grade"}...], "warnings": [...]}
+# → {"score": 81, "level": "좋음", "coverage": 0.59, "estimated": 0.41, "segments": [{"start_m", "end_m", "grade"}...],
+#    "walk_score": 74, "walk_segments": [{"start_m", "end_m", "grade"}...], "warnings": [...]}
 ```
+
+안전도 = **조명**(`score`, `level`, `segments`) + **보행 환경**(`walk_score`, `walk_segments`). 둘을 합칠지·비율은 팀 합의 전이라 따로 냄.
+
+### 보행 환경
+- 경로 25m 조각마다 15m 안 가장 가까운 OSM 길의 종류로 판정 (없으면 자료없음, 점수에서 뺌)
+- 등급(가중치, 임시값): 보행로 1.0 (footway·pedestrian·path·cycleway·living_street) / 골목 0.7 (residential·service 등) / 계단 0.6 / 비포장 0.6 (surface가 dirt·gravel 등) / 대로 0.5 (primary 이상) / 좁은 차도 0.2 (tertiary·*_link) / 인도 없음 0.0 (sidewalk=no인 차도)
+- 가중치 근거 (종로·중구 무작위 경로 300개): 대로를 0.3~0.4로 깎으면 조명의 '큰길 추정'을 뒤집은 값이 됨(상관 -0.6). 0.5면 상관 -0.33, 평균 60·표준편차 7.7. 점수 폭이 좁아 화면은 숫자보다 구간 색·경고 위주 권장
+- 50m 미만 구간은 앞 구간에 합침 (교차로에서 25m씩 끊김 방지). 인도 없음은 짧아도 남김
+- 인도 없음·계단·비포장 구간은 `warnings`에 문구 추가
+- sidewalk 태그는 차도의 약 7%에만 있음 (종로·중구) → 태그가 없으면 인도가 있다고 보고 '대로'·'좁은 차도'. surface도 보행로의 약 10%에만 있어 비포장은 일부만 잡힘
+- 횡단보도·교통량·CCTV는 아직 반영 안 됨
+- 실측: `python check_walk.py` (`pip install networkx`, `segment_stats.py`가 만든 `osm_graph_2500_v2.graphml` 필요) → 대표 코스 5개 + 무작위 경로 300개의 점수 분포·경고 수
+
+### 조명
 
 - 경로는 바꾸지 않고 조언만 함 (회피 경로는 2단계).
 - 구간 등급: 큰길(조명 추정) / 많음(100m당 조명 지점 8개 이상) / 보통 / 적음(조명 0개가 100m 이상) / 자료없음
@@ -155,8 +189,8 @@ idx.grade_course([(126.9918, 37.5704), (126.9850, 37.5820)], night=True)   # OSR
   점수엔 둘 다 들어가므로 같이 보여 줄 것 (예: 종로3가→동대문 100점 = 관측 0%, 추정 100%).
   그 구의 자료가 빠짐없다는 뜻은 아님 (동 단위 누락은 확인 불가).
    점수는 이 구간만으로 계산하므로 coverage가 다른 경로끼리 점수만 비교하지 말 것
-- 화면 표기는 '안전도'보다 '조명 환경 점수'(참고 지수)를 권장: 보도·횡단보도·교통량은 반영 안 됨
-- 앱 화면(FE)에 쓸 값: `score`, `level`, `coverage`, `estimated`, `segments`, `warnings`
+- 화면 표기는 '안전도'(참고 지수): 조명 + 보행 환경. 횡단보도·교통량·CCTV는 반영 안 됨
+- 앱 화면(FE)에 쓸 값: `score`, `level`, `coverage`, `estimated`, `segments`, `walk_score`, `walk_segments`, `warnings`
 - 안내 문구는 "확인된 가로등이 적어요" (자료 기준이지 현장 확인은 아님). 화면 문구는 FE와 협의
 
 ## 3. 보안등 데이터 (safety/서울_보안등.csv)

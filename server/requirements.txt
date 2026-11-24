@@ -2,3 +2,6 @@ fastapi==0.162.0
 uvicorn==0.54.0
 numpy==2.5.4
 ortools==9.15.6755
+# /safety: 도로·보안등 공간 계산 (pyogrio·shapely·pyproj 포함), 도로 파일(parquet) 읽기
+geopandas==1.2.0
+pyarrow==23.0.1
