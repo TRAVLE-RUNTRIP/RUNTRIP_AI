@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException
 
 from server.optimize import solve
 from server.reasons import GeminiError, make_reasons
+from server.safety_course import grade, load_index
 from server.scoring import Scorer, UnknownPlace
 
 log = logging.getLogger("runtrip.ai")
@@ -21,6 +22,7 @@ state = {}
 @asynccontextmanager
 async def lifespan(app):
     state["scorer"] = Scorer()          # 서버 시작 시 서빙 파일을 한 번만 읽음
+    state["safety"] = load_index()      # 서울 도로·보안등 (약 3초)
     yield
 
 
@@ -148,6 +150,36 @@ class ReasonsResponse(BaseModel):
     reasons: list[Reason]
 
 
+class SafetyRequest(BaseModel):
+    path: list[tuple[float, float]] = Field(min_length=2, max_length=20000)   # [lat, lng]. OSRM 16km 경로가 약 400점
+    isNight: bool
+
+    @field_validator("path")
+    @classmethod
+    def coords(cls, v):
+        if not all(math.isfinite(a) and math.isfinite(b) and -90 <= a <= 90 and -180 <= b <= 180 for a, b in v):
+            raise ValueError("[위도, 경도] 범위의 유한한 값이어야 해요")
+        if len(set(v)) < 2:
+            raise ValueError("서로 다른 점이 2개 이상이어야 해요")
+        return v
+
+
+class SafetySegment(BaseModel):
+    fromIndex: int
+    toIndex: int
+    grade: str
+
+
+class SafetyResponse(BaseModel):
+    score: int | None
+    level: str | None
+    coverage: float
+    estimated: float
+    hasLowSegment: bool
+    segments: list[SafetySegment]
+    warnings: list[str]
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -180,3 +212,9 @@ def reasons(req: ReasonsRequest):
     except GeminiError as e:
         log.warning("추천 이유 생성 실패: %s", e)
         return error(502, "REASON_FAILED", "추천 이유를 만들지 못했어요")
+
+
+@app.post("/safety", response_model=SafetyResponse)
+def safety(req: SafetyRequest):
+    """B4. 경로 조명 환경 점수 (경로는 바꾸지 않음). 보안등 자료 밖은 '자료없음', 자료 밖이 절반 넘으면 level '자료부족'"""
+    return grade(state["safety"], req.path, req.isNight)
