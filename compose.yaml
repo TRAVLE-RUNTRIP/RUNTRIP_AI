@@ -14,4 +14,6 @@ services:
       dockerfile: server/Dockerfile
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}   # /reasons. 레포 루트 .env에 GEMINI_API_KEY=... (git에 올리지 않음). 없으면 /reasons만 502
     restart: unless-stopped

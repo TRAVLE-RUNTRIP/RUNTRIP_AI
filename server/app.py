@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException
 
 from server.optimize import solve
+from server.reasons import GeminiError, make_reasons
 from server.safety_course import grade, load_index
 from server.scoring import Scorer, UnknownPlace
 
@@ -67,10 +68,9 @@ class Candidate(BaseModel):
         return v
 
 
-class RecommendRequest(BaseModel):
+class PrefRequest(BaseModel):
     preferences: list[Literal["NIGHT_VIEW", "ATTRACTION", "NATURE"]] = Field(min_length=1, max_length=3)
     isNight: bool
-    candidates: list[Candidate] = Field(max_length=2000)   # 장소는 1,480곳뿐이라 정상 요청은 넘지 않음 (API 명세 B1)
 
     @field_validator("preferences")
     @classmethod
@@ -78,6 +78,10 @@ class RecommendRequest(BaseModel):
         if len(set(v)) != len(v):
             raise ValueError("같은 취향이 중복됐어요")
         return v
+
+
+class RecommendRequest(PrefRequest):
+    candidates: list[Candidate] = Field(max_length=2000)   # 장소는 1,480곳뿐이라 정상 요청은 넘지 않음 (API 명세 B1)
 
 
 class PlaceScore(BaseModel):
@@ -116,6 +120,34 @@ class OptimizeResponse(BaseModel):
     found: bool
     orderedPlaceIds: list[str]
     totalKm: float | None
+
+
+class ReasonPlace(BaseModel):
+    placeId: str
+    name: str = Field(min_length=1)
+    overview: str | None = None          # 개요가 없는 장소도 근거만으로 설명
+    evidence: list[str] = Field(min_length=1, max_length=10)
+
+
+class ReasonsRequest(PrefRequest):
+    places: list[ReasonPlace] = Field(min_length=1, max_length=10)   # 코스 장소는 maxPlaces(최대 10) 이하
+
+    @field_validator("places")
+    @classmethod
+    def unique_places(cls, v):
+        if len({p.placeId for p in v}) != len(v):
+            raise ValueError("같은 장소가 중복됐어요")
+        return v
+
+
+class Reason(BaseModel):
+    placeId: str
+    reason: str | None
+    usedEvidence: list[str]
+
+
+class ReasonsResponse(BaseModel):
+    reasons: list[Reason]
 
 
 class SafetyRequest(BaseModel):
@@ -170,6 +202,16 @@ def optimize(req: OptimizeRequest):
     found, order, total_m = solve(req.targetKm, req.maxPlaces, req.timeLimitMs, req.placeIds, req.scores,
                                   req.distanceMatrixM, req.excludedCombos)
     return {"found": found, "orderedPlaceIds": order, "totalKm": round(total_m / 1000, 2) if found else None}
+
+
+@app.post("/reasons", response_model=ReasonsResponse)
+def reasons(req: ReasonsRequest):
+    """B3. 장소별 추천 이유 (Gemini + 근거 검증). 검증 실패 장소는 reason = null → Spring이 개요로 대체"""
+    try:
+        return {"reasons": make_reasons(req.preferences, req.isNight, req.places)}
+    except GeminiError as e:
+        log.warning("추천 이유 생성 실패: %s", e)
+        return error(502, "REASON_FAILED", "추천 이유를 만들지 못했어요")
 
 
 @app.post("/safety", response_model=SafetyResponse)
