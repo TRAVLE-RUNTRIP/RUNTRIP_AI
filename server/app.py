@@ -1,12 +1,15 @@
 """RUN+Trip AI 서버 (API 명세 B파트). 실행: uvicorn server.app:app --port 8000  (레포 루트에서)"""
 import logging
 import math
+import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException
 
@@ -26,7 +29,23 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="RUN+Trip AI", lifespan=lifespan)
+API_KEY = os.environ.get("AI_API_KEY", "")     # 있으면 X-API-Key 헤더가 같아야 함 (8000을 외부에 열었을 때 /reasons의 Gemini 요금 보호)
+OPEN_PATHS = {"/health"}                        # /docs·/openapi.json은 원래 이 검사를 거치지 않음
+key_header = APIKeyHeader(name="X-API-Key", auto_error=False)   # /docs의 Authorize 버튼으로 키를 넣어 시험
+
+
+class Unauthorized(Exception):
+    pass
+
+
+def check_key(request: Request, key: str | None = Depends(key_header)):
+    if API_KEY and request.url.path not in OPEN_PATHS and not secrets.compare_digest(key or "", API_KEY):
+        raise Unauthorized
+
+
+app = FastAPI(title="RUN+Trip AI", lifespan=lifespan, dependencies=[Depends(check_key)])
+if not API_KEY:
+    log.warning("AI_API_KEY가 없어 API 키 검사를 하지 않아요 (외부에 포트를 열었다면 꼭 설정)")
 
 
 def error(status, code, message):
@@ -39,6 +58,11 @@ async def on_validation(request: Request, exc: RequestValidationError):
     field = ".".join(map(str, first["loc"][1:]))          # 요청 전체 검사(model_validator) 오류는 필드가 없음
     msg = first["msg"].removeprefix("Value error, ")
     return error(400, "VALIDATION_ERROR", f"{field}: {msg}" if field else msg)
+
+
+@app.exception_handler(Unauthorized)
+async def on_unauthorized(request: Request, exc: Unauthorized):
+    return error(401, "UNAUTHORIZED", "API 키가 없거나 맞지 않아요 (X-API-Key 헤더)")
 
 
 @app.exception_handler(HTTPException)

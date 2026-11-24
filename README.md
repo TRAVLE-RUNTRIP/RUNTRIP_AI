@@ -22,6 +22,9 @@ uvicorn server.app:app --port 8000
 
 - BE 호출 주소: 같은 Compose 네트워크면 `http://ai-server:8000`, 로컬 개발은 `http://127.0.0.1:8000`. 포트는 127.0.0.1에만 열어 외부에 공개하지 않아요
   - `localhost`는 쓰지 말 것: Windows에서 IPv6(`::1`)를 먼저 시도하다 실패해 요청마다 약 2초 늦어져요 (500ms 제한 초과, 2026-11-06 측정)
+- API 키: 환경 변수 `AI_API_KEY`가 있으면 `/health` 말고 모든 API가 `X-API-Key: <키>` 헤더를 요구 (없거나 다르면 401 `UNAUTHORIZED`).
+  포트를 외부에 열었을 때 아무나 `/reasons`를 불러 Gemini 요금이 나가는 것을 막기 위함. Compose는 레포 루트 `.env`의 `AI_API_KEY=...`를 읽고, 없으면 검사하지 않음.
+  `/docs`는 키 없이 열리고, 오른쪽 위 **Authorize**에 키를 넣으면 화면에서 시험 가능
 - `osrm/`에서 OSRM을 따로 띄워 둔 상태면 5000번 포트가 겹치니 `osrm/`에서 `docker compose down` 후 실행
 - `GET /health` → `{"status": "ok"}`
 - `POST /recommend`
@@ -44,6 +47,7 @@ uvicorn server.app:app --port 8000
   | code | HTTP | 상황 |
   |---|---|---|
   | VALIDATION_ERROR | 400 | 취향이 없거나 중복·잘못된 값, `detourRatio`가 음수, 후보가 2,000개 초과 |
+  | UNAUTHORIZED | 401 | `AI_API_KEY`를 설정했는데 `X-API-Key` 헤더가 없거나 다름 |
   | UNKNOWN_PLACE | 422 | 서빙 파일에 없는 `placeId` (BE와 `places.csv` 버전이 다름) |
   | RESOURCE_NOT_FOUND / METHOD_NOT_ALLOWED | 404 / 405 | 없는 주소·메서드 |
   | SERVER_ERROR | 500 | 그 밖의 오류 |
@@ -101,6 +105,7 @@ uvicorn server.app:app --port 8000
 - 점검 (`pip install -r server/requirements-dev.txt`)
   - `python -m server.test_recommend`: 쿼리 2,000건 점수가 학습 때 점수와 같은지, 모델 파일이 없을 때 규칙 기준선으로 대신하는지, 오류 형식, 후보 수별 응답 시간
   - `python -m server.test_optimize`: 정답을 아는 작은 거리표 (개선안 7장 예시, 다시 만들기, 답 없음, 요청 오류)
+  - `python -m server.test_auth`: API 키 검사 (키 없음·틀림 401, `/health`·`/docs`는 열림, 키 설정이 없으면 검사 안 함)
   - `python -m server.bench_optimize --exact`: OSRM(127.0.0.1:5000)을 띄운 뒤 실제 거리표로 검증. 서울 8곳 × 3·5·10km × 순환·편도
   - `python -m server.test_reasons`: 가짜 Gemini 응답으로 근거 검증·장소 순서·실패 응답. `--live`면 실제 Gemini 호출 (키 필요)
   - `python -m server.test_safety`: 구간 → path 인덱스 변환, 빈틈·겹침, 자료 밖(부산) 경로, 오류 형식, 5·10km 응답 시간
